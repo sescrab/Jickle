@@ -1,0 +1,34 @@
+[
+  [
+    {
+      "id":1,
+      "class_name": "Person",
+      "data": {
+        "age": 12,
+        "name": "Dimas",
+        "object_parent":3
+      }
+    },
+    {
+      "id":2,
+      "class_name": "Programmer",
+      "data": {
+        "age": 21,
+        "name": "Dmitry",
+        "object_parent":1,
+        "language": "Java"
+      }
+    }
+  ],
+  [
+    {
+      "id":3,
+      "class_name": "Person",
+      "data": {
+        "age": 212,
+        "name": "Dima",
+        "object_parent":2
+      }
+    }
+  ]
+]
