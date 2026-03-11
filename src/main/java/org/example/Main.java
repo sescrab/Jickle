@@ -1,9 +1,11 @@
 package org.example;
 
+import org.example.jickle.JickleDeserializer;
 import org.example.jickle.JickleSerializer;
 import org.example.jickle.annotation.JickleIgnore;
 import org.example.jickle.annotation.JicklableClass;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -19,6 +21,7 @@ class Person {
 
     public Person parent;
 
+    public Person(){};
     public Person(int age, String name, Person parent) {
         this.age = age;
         this.name = name;
@@ -60,6 +63,10 @@ public class Main {
             System.out.println("After Jickling:");
             System.out.println(content);
 
+            String path = "test.json";
+            JickleDeserializer deserializer = new JickleDeserializer(false);
+            List<Object> objects = deserializer.load(path);
+          
         } catch (Exception err) {
             err.printStackTrace();
         }
