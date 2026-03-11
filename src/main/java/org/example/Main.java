@@ -49,7 +49,7 @@ public class Main {
             System.out.println(dimandr);
             System.out.println(unknown);
 
-            List<Person> rebyata = List.of(python_dev, dimandr, unknown);
+            List<Person> rebyata = List.of(dimandr);
 
             JickleSerializer serializer = new JickleSerializer(false);
 
