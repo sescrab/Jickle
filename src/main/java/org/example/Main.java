@@ -16,7 +16,7 @@ class Person {
     public int age;
     public String name;
 
-    @JickleIgnore
+//    @JickleIgnore
     public String bitcoin_wallet_password;
 
     public Person parent;
@@ -63,9 +63,18 @@ public class Main {
             System.out.println("After Jickling:");
             System.out.println(content);
 
-            String path = "test.json";
+            String path = "rebyata.json";
             JickleDeserializer deserializer = new JickleDeserializer(false);
-            List<Object> objects = deserializer.load(path);
+            List<Object> deserialized = deserializer.load(path);
+
+            Object before = rebyata.getFirst();
+            Object after = deserialized.getFirst();
+            if(before.equals(after)){
+                System.out.println("Pobeda!!!");
+            }
+            else{
+                System.out.println("AntiPobeda...");
+            }
           
         } catch (Exception err) {
             err.printStackTrace();
