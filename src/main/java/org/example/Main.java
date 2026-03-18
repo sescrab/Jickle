@@ -65,12 +65,12 @@ public class Main {
             System.out.println("After Jickling:");
             System.out.println(content);
 
-            String path = "rebyata.json";
+            String path = "family.json";
             JickleDeserializer deserializer = new JickleDeserializer(false);
             List<Object> deserialized = deserializer.load(path);
 
-            Object before = rebyata.getFirst();
-            Object after = deserialized.getFirst();
+            Object before = semeyka;
+            Object after = deserialized;
             if(before.equals(after)){
                 System.out.println("Pobeda!!!");
             }
