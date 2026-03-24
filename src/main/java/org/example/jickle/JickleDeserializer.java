@@ -8,6 +8,7 @@ import org.example.jickle.annotation.JicklableClass;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
@@ -47,9 +48,8 @@ public class JickleDeserializer {
             String id = objNode.get("id").asText();
             String className = objNode.get("class_name").asText();
 
-            if (idToInstance.containsKey(id)) {
-                throw new IllegalArgumentException("Duplicate id: " + id);
-            }
+            ObjectNode dataNode = (ObjectNode) objNode.get("data");
+            boolean isContainer = dataNode.has("is_container") && dataNode.get("is_container").asBoolean();
 
             Class<?> clazz;
             try {
@@ -58,70 +58,154 @@ public class JickleDeserializer {
                 throw new IllegalArgumentException("Class not found: " + className, e);
             }
 
-            if (!allowUnsafe && !clazz.isAnnotationPresent(JicklableClass.class)) {
+            if (!allowUnsafe && !isContainer && !clazz.isAnnotationPresent(JicklableClass.class)) {
                 throw new IllegalArgumentException(
                         "Class " + className + " is not annotated with @JicklableClass " +
                                 "(pass allowUnsafe = true if needed)"
                 );
             }
 
-            Object instance = createInstance(clazz);
+            Object instance;
+            if (isContainer) {
+                if (clazz.isArray()) {
+                    String compName = dataNode.get("component_type").asText();
+                    Class<?> compClass;
+                    try {
+                        compClass = getClassByName(compName);
+                    } catch (ClassNotFoundException e) {
+                        throw new IllegalArgumentException("Component class not found: " + compName, e);
+                    }
+                    int length = dataNode.get("elements").size();
+                    instance = Array.newInstance(compClass, length);
+                } else {
+                    // прочие коллекции распознаём как ArrayList (пока)
+                    instance = new ArrayList<>();
+                }
+            } else {
+                instance = createInstance(clazz);
+            }
+
+            if (idToInstance.containsKey(id)) {
+                throw new IllegalArgumentException("Duplicate id: " + id);
+            }
+
             idToInstance.put(id, instance);
         }
 
-        // Шаг 2: заполняем поля всех объектов
+        // Шаг 2: заполняем поля всех объектов (или элементы контейнеров)
         for (ObjectNode objNode : allObjNodes) {
             String id = objNode.get("id").asText();
             Object instance = idToInstance.get(id);
-            Class<?> clazz = instance.getClass();
-
             ObjectNode dataNode = (ObjectNode) objNode.get("data");
 
-            for (Iterator<Map.Entry<String, JsonNode>> it = dataNode.fields(); it.hasNext(); ) {
-                Map.Entry<String, JsonNode> entry = it.next();
-                String key = entry.getKey();
-                JsonNode valNode = entry.getValue();
+            boolean isContainer = dataNode.has("is_container") && dataNode.get("is_container").asBoolean();
 
-                String fieldName;
-                boolean isObjectRef = key.startsWith("object_");
-                if (isObjectRef) {
-                    fieldName = key.substring("object_".length());
-                } else {
-                    fieldName = key;
+            if (isContainer) {
+                JsonNode elementsNode = dataNode.get("elements");
+                if (elementsNode == null || !elementsNode.isArray()) {
+                    throw new IllegalArgumentException("Container object missing valid 'elements' array");
                 }
+                ArrayNode elements = (ArrayNode) elementsNode;
 
-                Field field = findField(clazz, fieldName);
-                if (field == null) {
-                    throw new IllegalArgumentException(
-                            "Class " + clazz.getName() + " does not have field '" + fieldName + "' " +
-                                    "(different set of fields)"
-                    );
-                }
+                if (dataNode.has("component_type")) {
+                    // массив
+                    String compName = dataNode.get("component_type").asText();
+                    Class<?> compClass;
+                    try {
+                        compClass = getClassByName(compName);
+                    } catch (ClassNotFoundException e) {
+                        throw new IllegalArgumentException("Component class not found: " + compName, e);
+                    }
+                    boolean isSimpleComponent = isSimpleType(compClass);
 
-                field.setAccessible(true);
-
-                Object fieldValue;
-                if (isObjectRef) {
-                    if (valNode.isNull()) {
-                        fieldValue = null;
-                    } else {
-                        String refId = valNode.asText();
-                        fieldValue = idToInstance.get(refId);
-                        if (fieldValue == null) {
-                            throw new IllegalArgumentException(
-                                    "Referenced object with id " + refId + " not found for field " + fieldName
-                            );
+                    for (int i = 0; i < elements.size(); i++) {
+                        JsonNode elemNode = elements.get(i);
+                        Object elemValue;
+                        if (elemNode.isNull()) {
+                            elemValue = null;
+                        } else if (isSimpleComponent) {
+                            elemValue = mapper.convertValue(elemNode, compClass);
+                        } else {
+                            String refId = elemNode.asText();
+                            elemValue = idToInstance.get(refId);
+                            if (elemValue == null) {
+                                throw new IllegalArgumentException(
+                                        "Referenced object with id " + refId + " not found for array element"
+                                );
+                            }
                         }
+                        Array.set(instance, i, elemValue);
                     }
                 } else {
-                    // Примитивы, String, Enum и другие простые типы
-                    fieldValue = mapper.convertValue(valNode, field.getType());
+                    // коллекция (распознаём как ArrayList из шага 1)
+                    Collection<Object> coll = (Collection<Object>) instance;
+                    for (JsonNode elemNode : elements) {
+                        Object elemValue;
+                        if (elemNode.isNull()) {
+                            elemValue = null;
+                        } else if (elemNode.isNumber()) {
+                            String refId = elemNode.asText();
+                            if (idToInstance.containsKey(refId)) {
+                                elemValue = idToInstance.get(refId);
+                            } else {
+                                elemValue = mapper.convertValue(elemNode, Object.class);
+                            }
+                        } else {
+                            elemValue = mapper.convertValue(elemNode, Object.class);
+                        }
+                        coll.add(elemValue);
+                    }
                 }
+            } else {
+                // обычный объект (исходная логика)
+                Class<?> clazz = instance.getClass();
 
-                try {
-                    field.set(instance, fieldValue);
-                } catch (IllegalAccessException e) {
-                    throw new IllegalArgumentException("Failed to set field " + fieldName + " in " + clazz.getName(), e);
+                for (Iterator<Map.Entry<String, JsonNode>> it = dataNode.fields(); it.hasNext(); ) {
+                    Map.Entry<String, JsonNode> entry = it.next();
+                    String key = entry.getKey();
+                    JsonNode valNode = entry.getValue();
+
+                    String fieldName;
+                    boolean isObjectRef = key.startsWith("object_");
+                    if (isObjectRef) {
+                        fieldName = key.substring("object_".length());
+                    } else {
+                        fieldName = key;
+                    }
+
+                    Field field = findField(clazz, fieldName);
+                    if (field == null) {
+                        throw new IllegalArgumentException(
+                                "Class " + clazz.getName() + " does not have field '" + fieldName + "' " +
+                                        "(different set of fields)"
+                        );
+                    }
+
+                    field.setAccessible(true);
+
+                    Object fieldValue;
+                    if (isObjectRef) {
+                        if (valNode.isNull()) {
+                            fieldValue = null;
+                        } else {
+                            String refId = valNode.asText();
+                            fieldValue = idToInstance.get(refId);
+                            if (fieldValue == null) {
+                                throw new IllegalArgumentException(
+                                        "Referenced object with id " + refId + " not found for field " + fieldName
+                                );
+                            }
+                        }
+                    } else {
+                        // Примитивы, String, Enum и другие простые типы
+                        fieldValue = mapper.convertValue(valNode, field.getType());
+                    }
+
+                    try {
+                        field.set(instance, fieldValue);
+                    } catch (IllegalAccessException e) {
+                        throw new IllegalArgumentException("Failed to set field " + fieldName + " in " + clazz.getName(), e);
+                    }
                 }
             }
         }
@@ -175,5 +259,34 @@ public class JickleDeserializer {
             }
         }
         return null;
+    }
+
+    // Вспомогательный метод для разрешения примитивных типов в component_type (массивы)
+    private Class<?> getClassByName(String className) throws ClassNotFoundException {
+        if ("int".equals(className)) return int.class;
+        if ("long".equals(className)) return long.class;
+        if ("double".equals(className)) return double.class;
+        if ("float".equals(className)) return float.class;
+        if ("boolean".equals(className)) return boolean.class;
+        if ("byte".equals(className)) return byte.class;
+        if ("short".equals(className)) return short.class;
+        if ("char".equals(className)) return char.class;
+        return Class.forName(className);
+    }
+
+    // Копия isSimpleType из сериализатора (для определения, как интерпретировать элементы массива)
+    private boolean isSimpleType(Class<?> type) {
+        return type.isPrimitive() ||
+                type == String.class ||
+                type == Boolean.class ||
+                type == Integer.class ||
+                type == Long.class ||
+                type == Double.class ||
+                type == Float.class ||
+                type == Byte.class ||
+                type == Short.class ||
+                type == Character.class ||
+                Number.class.isAssignableFrom(type) ||
+                type.isEnum();
     }
 }
