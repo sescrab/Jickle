@@ -76,17 +76,35 @@ public class JickleSerializer {
     }
 
     private void collectObjects(Object obj, Map<Object, Integer> idMap) throws IllegalAccessException {
-        if (obj == null || idMap.containsKey(obj)) return;
-        if (isSimpleType(obj.getClass())) return;
+        if (obj == null || idMap.containsKey(obj)) {
+            return;
+        }
+
+        if (isSimpleType(obj.getClass())) {
+            return;
+        }
 
         Class<?> cls = obj.getClass();
         boolean isArray = cls.isArray();
-        boolean isCollection = !isArray && (obj instanceof Collection<?>);
-        boolean isMap = !isArray && !isCollection && (obj instanceof Map<?, ?>);
+        boolean isList = !isArray && (obj instanceof List<?>);
+        boolean isMap = !isArray && !isList && (obj instanceof Map<?, ?>);
 
-        if (!isArray && !isCollection && !isMap) {
+        if (!isArray && !isList && !isMap) {
+            if (obj instanceof Collection<?>) {
+                throw new IllegalArgumentException(
+                        "Collection type '" + cls.getName() + "' is not supported yet. " +
+                                "Currently supported: List (ArrayList, immutable List.of etc.), HashMap. " +
+                                "To add more collections, extend JickleSerializer.collectObjects()"
+                );
+            }
+        }
+
+        if (!isArray && !isList && !isMap) {
             if (!allowUnsafe && !cls.isAnnotationPresent(JicklableClass.class)) {
-                throw new IllegalArgumentException("Class " + cls.getName() + " is not annotated with @JicklableClass (pass allowUnsafe = true if needed)");
+                throw new IllegalArgumentException(
+                        "Class " + cls.getName() + " is not annotated with @JicklableClass " +
+                                "(pass allowUnsafe = true if needed)"
+                );
             }
         }
 
@@ -95,10 +113,13 @@ public class JickleSerializer {
 
         if (isArray) {
             int length = java.lang.reflect.Array.getLength(obj);
-            for (int i = 0; i < length; i++)
+            for (int i = 0; i < length; i++) {
                 collectObjects(java.lang.reflect.Array.get(obj, i), idMap);
-        } else if (isCollection) {
-            for (Object item : (Collection<?>) obj) collectObjects(item, idMap);
+            }
+        } else if (isList) {
+            for (Object item : (List<?>) obj) {
+                collectObjects(item, idMap);
+            }
         } else if (isMap) {
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) obj).entrySet()) {
                 collectObjects(entry.getKey(), idMap);

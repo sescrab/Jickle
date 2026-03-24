@@ -2,8 +2,6 @@ package org.example;
 
 import org.example.jickle.JickleDeserializer;
 import org.example.jickle.JickleSerializer;
-import org.example.jickle.annotation.JickleIgnore;
-import org.example.jickle.annotation.JicklableClass;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -11,53 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
-
-@JicklableClass
-public class Person {
-    public int age;
-    public String name;
-
-    @JickleIgnore
-    public String bitcoin_wallet_password;
-
-    public Person parent;
-
-    public Person() {
-    }
-
-    public Person(int age, String name, Person parent) {
-        this.age = age;
-        this.name = name;
-        this.parent = parent;
-        this.bitcoin_wallet_password = "1337 BTC: " + age * 50;
-    }
-
-    @Override
-    public String toString() {
-        return "Person{" +
-                "age=" + age +
-                ", name='" + name + '\'' +
-                ", parent=" + (parent != null ? parent.name : "null") +
-                '}';
-    }
-
-    // Добавлено специально для корректного сравнения в тесте
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Person person = (Person) o;
-        return age == person.age &&
-                Objects.equals(name, person.name) &&
-                Objects.equals(parent, person.parent);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(age, name, parent);
-    }
-}
 
 public class Main {
     public static void main(String[] args) {

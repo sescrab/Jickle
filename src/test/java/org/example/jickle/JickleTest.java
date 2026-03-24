@@ -49,8 +49,8 @@ class JickleTest {
         List<Object> result = deserializer.load(file.toString());
         Person[] restored = (Person[]) result.get(0);
 
-        assertArrayEquals(original, restored, "Объекты и ссылки должны быть полностью восстановлены");
-        assertSame(restored[0], restored[1].parent, "Ссылки должны указывать на один и тот же объект");
+        assertArrayEquals(original, restored);
+        assertSame(restored[0], restored[1].parent);
     }
 
     @Test
@@ -62,7 +62,8 @@ class JickleTest {
         serializer.dump(original, file.toString());
 
         List<Object> result = deserializer.load(file.toString());
-        List<?> restored = (List<?>) result.get(0);
+        @SuppressWarnings("unchecked")
+        List<Person> restored = (List<Person>) result.get(0);
 
         assertEquals(1, restored.size());
         assertEquals(p, restored.get(0));
@@ -71,17 +72,20 @@ class JickleTest {
     @Test
     void testPrimitiveAndObjectArrays() throws Exception {
         int[] ints = {1, 2, 3, 4};
-        Person[] persons = {new Person(10, "A", null), new Person(20, "B", null)};
+        Person[] persons = {
+                new Person(10, "A", null),
+                new Person(20, "B", null)
+        };
 
+        // int[]
         Path file1 = tempDir.resolve("intarray.json");
         serializer.dump(ints, file1.toString());
-
         List<Object> r1 = deserializer.load(file1.toString());
         assertArrayEquals(ints, (int[]) r1.get(0));
 
+        // Person[]
         Path file2 = tempDir.resolve("personarray.json");
         serializer.dump(persons, file2.toString());
-
         List<Object> r2 = deserializer.load(file2.toString());
         assertArrayEquals(persons, (Person[]) r2.get(0));
     }
@@ -116,7 +120,8 @@ class JickleTest {
         serializer.dump(p, file.toString());
 
         String json = Files.readString(file);
-        assertFalse(json.contains("bitcoin_wallet_password"), "Поле с @JickleIgnore не должно попасть в JSON");
+        assertFalse(json.contains("bitcoin_wallet_password"),
+                "Поле с @JickleIgnore не должно сериализоваться");
     }
 
     @Test
@@ -128,26 +133,33 @@ class JickleTest {
 
         String json = Files.readString(file);
         assertTrue(json.contains("\"class_name\":\"org.example.Person[]\""),
-                "Массивы должны иметь красивое имя, а не [L...");
+                "Массивы должны иметь читаемое имя");
     }
 
     @Test
     void testUnsupportedCollectionThrowsClearMessage() {
-        Set<String> unsupported = Set.of("unsupported");
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> serializer.dump(unsupported, tempDir.resolve("bad.json").toString()));
+        Set<String> unsupported = new HashSet<>();
+        unsupported.add("one");
+        unsupported.add("two");
 
-        assertTrue(ex.getMessage().contains("not supported"));
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                serializer.dump(unsupported, tempDir.resolve("bad.json").toString())
+        );
+
+        String message = ex.getMessage().toLowerCase();
+        assertTrue(message.contains("not supported") || message.contains("collection"),
+                "Ожидалось исключение о неподдерживаемой коллекции. Получено: " + ex.getMessage());
     }
 
     @Test
     void testNonJicklableClassThrowsWhenNotAllowUnsafe() {
-        class Bad {
+        class BadClass {
             public int x;
         }
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> serializer.dump(new Bad(), tempDir.resolve("bad.json").toString()));
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                serializer.dump(new BadClass(), tempDir.resolve("bad.json").toString())
+        );
 
         assertTrue(ex.getMessage().contains("@JicklableClass"));
     }

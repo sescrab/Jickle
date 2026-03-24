@@ -199,18 +199,32 @@ public class JickleDeserializer {
     }
 
     // Поддержка красивого имени + совместимость со старым JVM-именем массива
+    // Поддержка красивого имени + совместимость со старым JVM-именем массива + примитивы
     private Class<?> getClassFromHumanReadableName(String name) throws ClassNotFoundException {
-        if (name.endsWith("[]")) {
-            String componentName = name.substring(0, name.length() - 2);
-            Class<?> compClass = getClassFromHumanReadableName(componentName);
-            return Array.newInstance(compClass, 0).getClass();
-        }
-        if (name.startsWith("[L") && name.endsWith(";")) {
-            String componentName = name.substring(2, name.length() - 1);
-            Class<?> compClass = Class.forName(componentName);
-            return Array.newInstance(compClass, 0).getClass();
-        }
-        return Class.forName(name);
+        // Примитивы
+        return switch (name) {
+            case "int" -> int.class;
+            case "long" -> long.class;
+            case "double" -> double.class;
+            case "float" -> float.class;
+            case "boolean" -> boolean.class;
+            case "byte" -> byte.class;
+            case "short" -> short.class;
+            case "char" -> char.class;
+            default -> {
+                if (name.endsWith("[]")) {
+                    String componentName = name.substring(0, name.length() - 2);
+                    Class<?> compClass = getClassFromHumanReadableName(componentName);
+                    yield Array.newInstance(compClass, 0).getClass();
+                }
+                if (name.startsWith("[L") && name.endsWith(";")) {
+                    String componentName = name.substring(2, name.length() - 1);
+                    Class<?> compClass = Class.forName(componentName);
+                    yield Array.newInstance(compClass, 0).getClass();
+                }
+                yield Class.forName(name);
+            }
+        };
     }
 
     private boolean isSimpleType(Class<?> type) {
