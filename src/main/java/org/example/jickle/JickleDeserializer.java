@@ -198,10 +198,7 @@ public class JickleDeserializer {
         };
     }
 
-    // Поддержка красивого имени + совместимость со старым JVM-именем массива
-    // Поддержка красивого имени + совместимость со старым JVM-именем массива + примитивы
     private Class<?> getClassFromHumanReadableName(String name) throws ClassNotFoundException {
-        // Примитивы
         return switch (name) {
             case "int" -> int.class;
             case "long" -> long.class;

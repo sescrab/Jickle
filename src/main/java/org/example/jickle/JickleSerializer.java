@@ -140,7 +140,7 @@ public class JickleSerializer {
     private ObjectNode buildObjectNode(Object obj, Map<Object, Integer> idMap) throws IllegalAccessException {
         ObjectNode node = mapper.createObjectNode();
         node.put("id", idMap.get(obj));
-        node.put("class_name", getHumanReadableClassName(obj.getClass()));   // ← красивое имя
+        node.put("class_name", getHumanReadableClassName(obj.getClass()));
 
         ObjectNode data = mapper.createObjectNode();
 
