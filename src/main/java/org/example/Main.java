@@ -1,5 +1,6 @@
 package org.example;
 
+import org.example.additional.Person;
 import org.example.jickle.JickleDeserializer;
 import org.example.jickle.JickleSerializer;
 

@@ -1,6 +1,6 @@
 package org.example.jickle;
 
-import org.example.Person;
+import org.example.additional.Person;
 import org.junit.jupiter.api.*;
 
 import java.io.IOException;
@@ -132,7 +132,7 @@ class JickleTest {
         serializer.dump(arr, file.toString());
 
         String json = Files.readString(file);
-        assertTrue(json.contains("\"class_name\":\"org.example.Person[]\""),
+        assertTrue(json.contains("\"class_name\":\"org.example.additional.Person[]\""),
                 "Массивы должны иметь читаемое имя");
     }
 

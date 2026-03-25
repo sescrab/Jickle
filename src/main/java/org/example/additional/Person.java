@@ -1,4 +1,4 @@
-package org.example;
+package org.example.additional;
 
 import org.example.jickle.annotation.JickleIgnore;
 import org.example.jickle.annotation.JicklableClass;
