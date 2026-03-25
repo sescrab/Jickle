@@ -130,7 +130,8 @@ public class JickleFilter {
     public static boolean isReference(JsonNode node) {
         if (node.isNull()) return false;
         if (node.isTextual() && node.textValue().startsWith("#")) return true;
-        return node.isNumber(); // т.к. object_x хранит просто число
+//        return node.isNumber(); // т.к. object_x хранит просто число
+        return false;
     }
 
     public static String extractRefId(JsonNode node) {

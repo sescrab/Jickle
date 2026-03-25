@@ -2,6 +2,7 @@ package org.example;
 
 import org.example.additional.Person;
 import org.example.jickle.JickleDeserializer;
+import org.example.jickle.JickleFilter;
 import org.example.jickle.JickleSerializer;
 
 import java.nio.charset.StandardCharsets;
@@ -39,7 +40,8 @@ public class Main {
 
             JickleDeserializer deserializer = new JickleDeserializer(false);
             List<Object> result = deserializer.load("family.json");
-
+            JickleFilter adultsFilter = JickleFilter.ge("age", 18);
+            List<Object> adults = deserializer.load("rebyata_list.json", adultsFilter);
             // family.json содержит массив Person[] как корневой объект
             Object[] deserializedArray = (Object[]) result.get(0);
 
