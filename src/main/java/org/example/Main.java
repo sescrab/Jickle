@@ -2,43 +2,12 @@ package org.example;
 
 import org.example.jickle.JickleDeserializer;
 import org.example.jickle.JickleSerializer;
-import org.example.jickle.annotation.JickleIgnore;
-import org.example.jickle.annotation.JicklableClass;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.List;
-
-@JicklableClass
-class Person {
-    public int age;
-    public String name;
-
-//    @JickleIgnore
-    public String bitcoin_wallet_password;
-
-    public Person parent;
-
-    public Person(){};
-    public Person(int age, String name, Person parent) {
-        this.age = age;
-        this.name = name;
-        this.parent = parent;
-        this.bitcoin_wallet_password = "1337 BTC: " + age * 50;
-    }
-
-    @Override
-    public String toString() {
-        return "Person{" +
-                "age=" + age +
-                ", name='" + name + '\'' +
-                ", secret='" + bitcoin_wallet_password + '\'' +
-                ", parent=" + (parent != null ? parent.name : "null") +
-                '}';
-    }
-}
 
 public class Main {
     public static void main(String[] args) {
@@ -62,22 +31,24 @@ public class Main {
             serializer.dump(semeyka, "family.json");
 
             String content = Files.readString(Paths.get("rebyata.json"), StandardCharsets.UTF_8);
-            System.out.println("After Jickling:");
+            System.out.println("\nAfter Jickling (rebyata.json):");
             System.out.println(content);
 
-            String path = "family.json";
             JickleDeserializer deserializer = new JickleDeserializer(false);
-            List<Object> deserialized = deserializer.load(path);
+            List<Object> result = deserializer.load("family.json");
 
-            Object before = semeyka;
-            Object after = deserialized;
-            if(before.equals(after)){
-                System.out.println("Pobeda!!!");
+            // family.json содержит массив Person[] как корневой объект
+            Object[] deserializedArray = (Object[]) result.get(0);
+
+            System.out.println("\nDeserialized family (" + deserializedArray.length + " persons):");
+            for (Object p : deserializedArray) {
+                System.out.println(p);
             }
-            else{
-                System.out.println("AntiPobeda...");
-            }
-          
+
+            boolean success = Arrays.deepEquals(semeyka, deserializedArray);
+            System.out.println("\nComparison result: " + (success ? "Pobeda!!!" : "AntiPobeda..."));
+
+
         } catch (Exception err) {
             err.printStackTrace();
         }

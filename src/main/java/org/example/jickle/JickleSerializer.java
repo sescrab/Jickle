@@ -33,17 +33,21 @@ public class JickleSerializer {
         Set<Object> rootObjects = new HashSet<>();
 
         if (object instanceof Collection<?> collection) {
-            for (Object item : collection) {
-                collectObjects(item, idMap);
-                if (item != null) rootObjects.add(item);
-            }
+            collectObjects(object, idMap);
+            for (Object item : collection) collectObjects(item, idMap);
+            rootObjects.add(object);
         } else if (object.getClass().isArray()) {
             int len = java.lang.reflect.Array.getLength(object);
-            for (int i = 0; i < len; i++) {
-                Object item = java.lang.reflect.Array.get(object, i);
-                collectObjects(item, idMap);
-            }
+            for (int i = 0; i < len; i++)
+                collectObjects(java.lang.reflect.Array.get(object, i), idMap);
             collectObjects(object, idMap);
+            rootObjects.add(object);
+        } else if (object instanceof Map<?, ?> map) {
+            collectObjects(object, idMap);
+            for (Map.Entry<?, ?> e : map.entrySet()) {
+                collectObjects(e.getKey(), idMap);
+                collectObjects(e.getValue(), idMap);
+            }
             rootObjects.add(object);
         } else {
             collectObjects(object, idMap);
@@ -53,17 +57,13 @@ public class JickleSerializer {
         ArrayNode mainArray = mapper.createArrayNode();
         ArrayNode extraArray = mapper.createArrayNode();
 
-        for (Object obj : rootObjects) {
-            mainArray.add(buildObjectNode(obj, idMap));
-        }
+        for (Object obj : rootObjects) mainArray.add(buildObjectNode(obj, idMap));
 
         List<Object> extras = new ArrayList<>(idMap.keySet());
         extras.removeAll(rootObjects);
         extras.sort(Comparator.comparingInt(idMap::get));
 
-        for (Object obj : extras) {
-            extraArray.add(buildObjectNode(obj, idMap));
-        }
+        for (Object obj : extras) extraArray.add(buildObjectNode(obj, idMap));
 
         ArrayNode root = mapper.createArrayNode();
         root.add(mainArray);
@@ -80,11 +80,26 @@ public class JickleSerializer {
             return;
         }
 
+        if (isSimpleType(obj.getClass())) {
+            return;
+        }
+
         Class<?> cls = obj.getClass();
         boolean isArray = cls.isArray();
-        boolean isCollection = !isArray && (obj instanceof Collection<?>);
+        boolean isList = !isArray && (obj instanceof List<?>);
+        boolean isMap = !isArray && !isList && (obj instanceof Map<?, ?>);
 
-        if (!isArray && !isCollection) {
+        if (!isArray && !isList && !isMap) {
+            if (obj instanceof Collection<?>) {
+                throw new IllegalArgumentException(
+                        "Collection type '" + cls.getName() + "' is not supported yet. " +
+                                "Currently supported: List (ArrayList, immutable List.of etc.), HashMap. " +
+                                "To add more collections, extend JickleSerializer.collectObjects()"
+                );
+            }
+        }
+
+        if (!isArray && !isList && !isMap) {
             if (!allowUnsafe && !cls.isAnnotationPresent(JicklableClass.class)) {
                 throw new IllegalArgumentException(
                         "Class " + cls.getName() + " is not annotated with @JicklableClass " +
@@ -99,26 +114,23 @@ public class JickleSerializer {
         if (isArray) {
             int length = java.lang.reflect.Array.getLength(obj);
             for (int i = 0; i < length; i++) {
-                Object item = java.lang.reflect.Array.get(obj, i);
+                collectObjects(java.lang.reflect.Array.get(obj, i), idMap);
+            }
+        } else if (isList) {
+            for (Object item : (List<?>) obj) {
                 collectObjects(item, idMap);
             }
-        } else if (isCollection) {
-            for (Object item : (Collection<?>) obj) {
-                collectObjects(item, idMap);
+        } else if (isMap) {
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) obj).entrySet()) {
+                collectObjects(entry.getKey(), idMap);
+                collectObjects(entry.getValue(), idMap);
             }
         } else {
             for (Field field : getAllFields(cls)) {
-                if (field.isAnnotationPresent(JickleIgnore.class)) {
-                    continue;
-                }
+                if (field.isAnnotationPresent(JickleIgnore.class)) continue;
                 field.setAccessible(true);
                 Object value = field.get(obj);
-                if (value == null) {
-                    continue;
-                }
-
-                if (!isSimpleType(value.getClass()) &&
-                        !(value instanceof Collection<?> || value.getClass().isArray())) {
+                if (value != null && !isSimpleType(value.getClass())) {
                     collectObjects(value, idMap);
                 }
             }
@@ -128,37 +140,44 @@ public class JickleSerializer {
     private ObjectNode buildObjectNode(Object obj, Map<Object, Integer> idMap) throws IllegalAccessException {
         ObjectNode node = mapper.createObjectNode();
         node.put("id", idMap.get(obj));
-        node.put("class_name", obj.getClass().getName());
+        node.put("class_name", getHumanReadableClassName(obj.getClass()));
 
         ObjectNode data = mapper.createObjectNode();
 
         boolean isArray = obj.getClass().isArray();
         boolean isCollection = obj instanceof Collection<?> && !isArray;
+        boolean isMap = !isArray && !isCollection && obj instanceof Map<?, ?>;
 
-        if (isArray || isCollection) {
+        if (isArray || isCollection || isMap) {
             data.put("is_container", true);
             if (isArray) {
                 data.put("component_type", obj.getClass().getComponentType().getName());
+            } else {
+                data.put("collection_class", obj.getClass().getName());
             }
 
-            ArrayNode elements = mapper.createArrayNode();
-            Iterable<?> iterable = isArray
-                    ? () -> java.util.Arrays.stream((Object[]) obj).iterator()
-                    : (Collection<?>) obj;
-
-            for (Object item : iterable) {
-                if (item == null) {
-                    elements.addNull();
-                } else if (isSimpleType(item.getClass())) {
-                    putSimpleValueToArray(elements, item);
-                } else {
-                    Integer refId = idMap.get(item);
-                    if (refId != null) {
-                        elements.add(refId);
+            if (isArray || isCollection) {
+                ArrayNode elements = mapper.createArrayNode();
+                if (isArray) {
+                    int length = java.lang.reflect.Array.getLength(obj);
+                    for (int i = 0; i < length; i++) {
+                        addContainerElement(elements, java.lang.reflect.Array.get(obj, i), idMap);
                     }
+                } else {
+                    for (Object item : (Collection<?>) obj)
+                        addContainerElement(elements, item, idMap);
                 }
+                data.set("elements", elements);
+            } else if (isMap) {
+                ArrayNode entries = mapper.createArrayNode();
+                for (Map.Entry<?, ?> entry : ((Map<?, ?>) obj).entrySet()) {
+                    ArrayNode pair = mapper.createArrayNode();
+                    addContainerElement(pair, entry.getKey(), idMap);
+                    addContainerElement(pair, entry.getValue(), idMap);
+                    entries.add(pair);
+                }
+                data.set("entries", entries);
             }
-            data.set("elements", elements);
         } else {
             for (Field field : getAllFields(obj.getClass())) {
                 if (field.isAnnotationPresent(JickleIgnore.class)) continue;
@@ -167,25 +186,35 @@ public class JickleSerializer {
                 if (value == null) continue;
 
                 String fieldName = field.getName();
-
                 if (isSimpleType(value.getClass())) {
                     putSimpleValue(data, fieldName, value);
-                } else if (value instanceof Collection<?> || value.getClass().isArray()) {
-                    Integer refId = idMap.get(value);
-                    if (refId != null) {
-                        data.put("object_" + fieldName, refId);
-                    }
                 } else {
                     Integer refId = idMap.get(value);
-                    if (refId != null) {
-                        data.put("object_" + fieldName, refId);
-                    }
+                    if (refId != null) data.put("object_" + fieldName, refId);
                 }
             }
         }
 
         node.set("data", data);
         return node;
+    }
+
+    private void addContainerElement(ArrayNode elements, Object item, Map<Object, Integer> idMap) {
+        if (item == null) {
+            elements.addNull();
+        } else if (isSimpleType(item.getClass())) {
+            putSimpleValueToArray(elements, item);
+        } else {
+            Integer refId = idMap.get(item);
+            if (refId != null) elements.add("#" + refId);
+        }
+    }
+
+    private String getHumanReadableClassName(Class<?> clazz) {
+        if (clazz.isArray()) {
+            return getHumanReadableClassName(clazz.getComponentType()) + "[]";
+        }
+        return clazz.getName();
     }
 
     private void putSimpleValueToArray(ArrayNode arr, Object value) {
@@ -195,6 +224,9 @@ public class JickleSerializer {
         else if (value instanceof Double d) arr.add(d);
         else if (value instanceof Float f) arr.add(f);
         else if (value instanceof Boolean b) arr.add(b);
+        else if (value instanceof Short s) arr.add(s);
+        else if (value instanceof Byte b) arr.add(b.intValue());
+        else if (value instanceof Character c) arr.add(String.valueOf(c));
         else if (value.getClass().isEnum()) arr.add(((Enum<?>) value).name());
         else arr.addPOJO(value);
     }
@@ -206,6 +238,9 @@ public class JickleSerializer {
         else if (value instanceof Double d) node.put(key, d);
         else if (value instanceof Float f) node.put(key, f);
         else if (value instanceof Boolean b) node.put(key, b);
+        else if (value instanceof Short s) node.put(key, s);
+        else if (value instanceof Byte b) node.put(key, b.intValue());
+        else if (value instanceof Character c) node.put(key, String.valueOf(c));
         else if (value.getClass().isEnum()) node.put(key, ((Enum<?>) value).name());
         else node.putPOJO(key, value);
     }
