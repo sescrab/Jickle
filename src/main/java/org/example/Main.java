@@ -23,6 +23,7 @@ public class Main {
             System.out.println(unknown);
 
             List<Person> rebyata = List.of(dimandr);
+            List<Person> rebyatav2 = List.of(unknown, python_dev);
             Person[] semeyka = {python_dev, dimandr, unknown};
 
             JickleSerializer serializer = new JickleSerializer(false);
@@ -30,6 +31,7 @@ public class Main {
             serializer.dump(unknown, "orphan.json");
             serializer.dump(rebyata, "rebyata.json");
             serializer.dump(semeyka, "family.json");
+            serializer.dumpList(rebyatav2, "rebyata_list.json");
 
             String content = Files.readString(Paths.get("rebyata.json"), StandardCharsets.UTF_8);
             System.out.println("\nAfter Jickling (rebyata.json):");

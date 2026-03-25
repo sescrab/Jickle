@@ -32,27 +32,7 @@ public class JickleSerializer {
         Map<Object, Integer> idMap = new IdentityHashMap<>();
         Set<Object> rootObjects = new HashSet<>();
 
-        if (object instanceof Collection<?> collection) {
-            collectObjects(object, idMap);
-            for (Object item : collection) collectObjects(item, idMap);
-            rootObjects.add(object);
-        } else if (object.getClass().isArray()) {
-            int len = java.lang.reflect.Array.getLength(object);
-            for (int i = 0; i < len; i++)
-                collectObjects(java.lang.reflect.Array.get(object, i), idMap);
-            collectObjects(object, idMap);
-            rootObjects.add(object);
-        } else if (object instanceof Map<?, ?> map) {
-            collectObjects(object, idMap);
-            for (Map.Entry<?, ?> e : map.entrySet()) {
-                collectObjects(e.getKey(), idMap);
-                collectObjects(e.getValue(), idMap);
-            }
-            rootObjects.add(object);
-        } else {
-            collectObjects(object, idMap);
-            if (object != null) rootObjects.add(object);
-        }
+        parseObject(object, idMap, rootObjects);
 
         ArrayNode mainArray = mapper.createArrayNode();
         ArrayNode extraArray = mapper.createArrayNode();
@@ -74,7 +54,70 @@ public class JickleSerializer {
 
         Files.writeString(Path.of(filePath), json, StandardCharsets.UTF_8);
     }
+    public void dumpList(List<?> objList, String filePath) throws IOException, IllegalAccessException {
+        if (objList == null || objList.isEmpty()) {
+            // Можно либо выбросить исключение, либо записать пустой JSON
+            Files.writeString(Path.of(filePath), "[[],[]]", StandardCharsets.UTF_8);
+            return;
+        }
 
+        Map<Object, Integer> idMap = new IdentityHashMap<>();
+        Set<Object> rootObjects = new HashSet<>();
+
+        // ← Вот здесь было главное отличие от старого dump
+        for (Object object : objList) {
+            parseObject(object, idMap, rootObjects);
+        }
+
+        // Всё остальное — точно так же, как в dump()
+        ArrayNode mainArray = mapper.createArrayNode();
+        ArrayNode extraArray = mapper.createArrayNode();
+
+        for (Object obj : rootObjects) {
+            mainArray.add(buildObjectNode(obj, idMap));
+        }
+
+        List<Object> extras = new ArrayList<>(idMap.keySet());
+        extras.removeAll(rootObjects);
+        extras.sort(Comparator.comparingInt(idMap::get));
+
+        for (Object obj : extras) {
+            extraArray.add(buildObjectNode(obj, idMap));
+        }
+
+        ArrayNode root = mapper.createArrayNode();
+        root.add(mainArray);
+        root.add(extraArray);
+
+        String json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
+        json = json.replaceAll("\\s*:\\s*", ":");
+
+        Files.writeString(Path.of(filePath), json, StandardCharsets.UTF_8);
+    }
+
+    private void parseObject(Object object, Map<Object, Integer> idMap, Set<Object> rootObjects) throws IllegalAccessException{
+        if (object instanceof Collection<?> collection) {
+            collectObjects(object, idMap);
+            for (Object item : collection) collectObjects(item, idMap);
+            rootObjects.add(object);
+        } else if (object.getClass().isArray()) {
+            int len = java.lang.reflect.Array.getLength(object);
+            for (int i = 0; i < len; i++)
+                collectObjects(java.lang.reflect.Array.get(object, i), idMap);
+            collectObjects(object, idMap);
+            rootObjects.add(object);
+        } else if (object instanceof Map<?, ?> map) {
+            collectObjects(object, idMap);
+            for (Map.Entry<?, ?> e : map.entrySet()) {
+                collectObjects(e.getKey(), idMap);
+                collectObjects(e.getValue(), idMap);
+            }
+            rootObjects.add(object);
+        } else {
+            collectObjects(object, idMap);
+            if (object != null) rootObjects.add(object);
+        }
+    }
     private void collectObjects(Object obj, Map<Object, Integer> idMap) throws IllegalAccessException {
         if (obj == null || idMap.containsKey(obj)) {
             return;
