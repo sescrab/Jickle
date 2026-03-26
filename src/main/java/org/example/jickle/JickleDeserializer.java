@@ -1,5 +1,8 @@
 package org.example.jickle;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -7,11 +10,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.example.jickle.annotation.JicklableClass;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -24,9 +27,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
 public class JickleDeserializer {
 
@@ -39,11 +39,13 @@ public class JickleDeserializer {
     );
 
     private final ObjectMapper mapper;
+    private final JsonFactory jsonFactory;
     private final boolean allowUnsafe;
 
     public JickleDeserializer(boolean allowUnsafe) {
         this.allowUnsafe = allowUnsafe;
         this.mapper = new ObjectMapper();
+        this.jsonFactory = mapper.getFactory();
     }
 
     public List<Object> load(String filePath) throws IOException, ClassNotFoundException, IllegalAccessException {
@@ -52,67 +54,145 @@ public class JickleDeserializer {
 
     public List<Object> load(String filePath, JickleFilter filter)
             throws IOException, ClassNotFoundException, IllegalAccessException {
-        JsonNode rootNode = mapper.readTree(Files.readString(Path.of(filePath), StandardCharsets.UTF_8));
-        if (!rootNode.isArray() || rootNode.size() != 2) {
-            throw new IllegalArgumentException("Invalid format: root must be an array [main, additional]");
-        }
+        StreamedRecords streamedRecords = readRecordsStreaming(Path.of(filePath));
+        Map<String, ObjectNode> idToNode = buildNodeIndex(streamedRecords.records());
 
-        ArrayNode mainArray = asArray(rootNode.get(0), "main");
-        ArrayNode additionalArray = asArray(rootNode.get(1), "additional");
-
-        List<ObjectNode> mainNodes = readObjectNodes(mainArray);
-        List<ObjectNode> additionalNodes = readObjectNodes(additionalArray);
-        List<ObjectNode> allNodes = Stream.concat(mainNodes.stream(), additionalNodes.stream()).toList();
-
-        Map<String, ObjectNode> idToNode = allNodes.stream()
-                .collect(Collectors.toMap(node -> node.get("id").asText(), node -> node, (left, right) -> left, LinkedHashMap::new));
-
-        List<ObjectNode> matchingRootNodes = mainNodes.stream()
-                .filter(node -> filter == null || filter.matches(node, idToNode))
+        List<RawRecord> matchingRoots = streamedRecords.rootIds().stream()
+                .map(streamedRecords.records()::get)
+                .filter(record -> record != null && (filter == null || filter.matches(record.node(), idToNode)))
                 .toList();
 
-        if (matchingRootNodes.isEmpty()) {
+        if (matchingRoots.isEmpty()) {
             return List.of();
         }
 
-        Set<String> reachableIds = collectReachableIds(matchingRootNodes, idToNode);
-        List<ObjectNode> nodesToProcess = allNodes.stream()
-                .filter(node -> reachableIds.contains(node.get("id").asText()))
-                .toList();
+        Set<String> reachableIds = collectReachableIds(matchingRoots, streamedRecords.records());
+        Map<String, Object> idToInstance = instantiateReachableObjects(reachableIds, streamedRecords.records());
+        fillReachableObjects(reachableIds, streamedRecords.records(), idToInstance);
 
-        Map<String, Object> idToInstance = new LinkedHashMap<>();
-        for (ObjectNode node : nodesToProcess) {
-            String id = node.get("id").asText();
-            ObjectNode dataNode = asObject(node.get("data"), "data");
-            Class<?> clazz = getClassFromHumanReadableName(node.get("class_name").asText());
-            boolean isContainer = isContainer(dataNode);
-
-            validateClass(clazz);
-            Object instance = isContainer ? createContainerInstance(clazz, dataNode) : createInstance(clazz);
-            idToInstance.put(id, instance);
-        }
-
-        for (ObjectNode node : nodesToProcess) {
-            String id = node.get("id").asText();
-            Object instance = idToInstance.get(id);
-            ObjectNode dataNode = asObject(node.get("data"), "data");
-
-            if (isContainer(dataNode)) {
-                fillContainer(instance, dataNode, idToInstance);
-            }
-            fillObjectFields(instance, dataNode, idToInstance);
-        }
-
-        return matchingRootNodes.stream()
-                .map(node -> idToInstance.get(node.get("id").asText()))
+        return matchingRoots.stream()
+                .map(record -> idToInstance.get(record.id()))
                 .toList();
     }
 
-    private ArrayNode asArray(JsonNode node, String label) {
-        if (node instanceof ArrayNode arrayNode) {
-            return arrayNode;
+    private StreamedRecords readRecordsStreaming(Path path) throws IOException {
+        Map<String, RawRecord> records = new LinkedHashMap<>();
+        List<String> rootIds = new ArrayList<>();
+
+        try (InputStream inputStream = Files.newInputStream(path);
+             JsonParser parser = jsonFactory.createParser(inputStream)) {
+
+            if (parser.nextToken() != JsonToken.START_ARRAY) {
+                throw new IllegalArgumentException("Invalid format: root must be an array [main, additional]");
+            }
+
+            readRecordArray(parser, records, rootIds, true, "main");
+            readRecordArray(parser, records, rootIds, false, "additional");
+
+            if (parser.nextToken() != JsonToken.END_ARRAY) {
+                throw new IllegalArgumentException("Invalid format: root must be an array [main, additional]");
+            }
         }
-        throw new IllegalArgumentException("Invalid format: " + label + " must be an array");
+
+        return new StreamedRecords(records, rootIds);
+    }
+
+    private void readRecordArray(JsonParser parser,
+                                 Map<String, RawRecord> records,
+                                 List<String> rootIds,
+                                 boolean root,
+                                 String label) throws IOException {
+        if (parser.nextToken() != JsonToken.START_ARRAY) {
+            throw new IllegalArgumentException("Invalid format: " + label + " must be an array");
+        }
+
+        while (parser.nextToken() != JsonToken.END_ARRAY) {
+            if (parser.currentToken() != JsonToken.START_OBJECT) {
+                parser.skipChildren();
+                continue;
+            }
+
+            ObjectNode node = mapper.readTree(parser);
+            RawRecord record = toRawRecord(node, root);
+            records.put(record.id(), record);
+            if (root) {
+                rootIds.add(record.id());
+            }
+        }
+    }
+
+    private RawRecord toRawRecord(ObjectNode node, boolean root) {
+        String id = node.path("id").asText();
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("Invalid format: object id is missing");
+        }
+
+        ObjectNode data = asObject(node.get("data"), "data");
+        Set<String> references = new LinkedHashSet<>();
+        collectReferenceIds(data, references);
+        return new RawRecord(id, node, data, references, root);
+    }
+
+    private Map<String, ObjectNode> buildNodeIndex(Map<String, RawRecord> records) {
+        Map<String, ObjectNode> idToNode = new LinkedHashMap<>();
+        records.forEach((id, record) -> idToNode.put(id, record.node()));
+        return idToNode;
+    }
+
+    private Set<String> collectReachableIds(List<RawRecord> roots, Map<String, RawRecord> records) {
+        Set<String> reachable = new LinkedHashSet<>();
+        roots.forEach(root -> collectReachable(root, records, reachable));
+        return reachable;
+    }
+
+    private void collectReachable(RawRecord record, Map<String, RawRecord> records, Set<String> reachable) {
+        if (!reachable.add(record.id())) {
+            return;
+        }
+
+        record.references().stream()
+                .map(records::get)
+                .filter(java.util.Objects::nonNull)
+                .forEach(target -> collectReachable(target, records, reachable));
+    }
+
+    private Map<String, Object> instantiateReachableObjects(Set<String> reachableIds, Map<String, RawRecord> records)
+            throws ClassNotFoundException {
+        Map<String, Object> idToInstance = new LinkedHashMap<>();
+
+        for (String id : records.keySet()) {
+            if (!reachableIds.contains(id)) {
+                continue;
+            }
+
+            RawRecord record = records.get(id);
+            Class<?> clazz = getClassFromHumanReadableName(record.node().get("class_name").asText());
+            boolean isContainer = isContainer(record.data());
+
+            validateClass(clazz);
+            Object instance = isContainer ? createContainerInstance(clazz, record.data()) : createInstance(clazz);
+            idToInstance.put(id, instance);
+        }
+
+        return idToInstance;
+    }
+
+    private void fillReachableObjects(Set<String> reachableIds,
+                                      Map<String, RawRecord> records,
+                                      Map<String, Object> idToInstance) throws IllegalAccessException {
+        for (String id : records.keySet()) {
+            if (!reachableIds.contains(id)) {
+                continue;
+            }
+
+            RawRecord record = records.get(id);
+            Object instance = idToInstance.get(id);
+
+            if (isContainer(record.data())) {
+                fillContainer(instance, record.data(), idToInstance);
+            }
+            fillObjectFields(instance, record.data(), idToInstance);
+        }
     }
 
     private ObjectNode asObject(JsonNode node, String label) {
@@ -122,35 +202,11 @@ public class JickleDeserializer {
         throw new IllegalArgumentException("Invalid format: " + label + " must be an object");
     }
 
-    private List<ObjectNode> readObjectNodes(ArrayNode arrayNode) {
-        return stream(arrayNode)
-                .filter(JsonNode::isObject)
-                .map(node -> (ObjectNode) node)
-                .toList();
-    }
-
-    private Stream<JsonNode> stream(ArrayNode arrayNode) {
-        return StreamSupport.stream(arrayNode.spliterator(), false);
-    }
-
-    private Set<String> collectReachableIds(List<ObjectNode> roots, Map<String, ObjectNode> idToNode) {
-        Set<String> reachable = new LinkedHashSet<>();
-        roots.forEach(root -> collectReachable(root, idToNode, reachable));
-        return reachable;
-    }
-
-    private void collectReachable(ObjectNode node, Map<String, ObjectNode> idToNode, Set<String> reachable) {
-        String id = node.get("id").asText();
-        if (!reachable.add(id)) {
-            return;
+    private ArrayNode asArray(JsonNode node, String label) {
+        if (node instanceof ArrayNode arrayNode) {
+            return arrayNode;
         }
-
-        Set<String> referencedIds = new LinkedHashSet<>();
-        collectReferenceIds(asObject(node.get("data"), "data"), referencedIds);
-        referencedIds.stream()
-                .map(idToNode::get)
-                .filter(java.util.Objects::nonNull)
-                .forEach(target -> collectReachable(target, idToNode, reachable));
+        throw new IllegalArgumentException("Invalid format: " + label + " must be an array");
     }
 
     private void collectReferenceIds(JsonNode node, Set<String> referencedIds) {
@@ -363,5 +419,11 @@ public class JickleDeserializer {
         }
 
         return getClassByName(name);
+    }
+
+    private record RawRecord(String id, ObjectNode node, ObjectNode data, Set<String> references, boolean root) {
+    }
+
+    private record StreamedRecords(Map<String, RawRecord> records, List<String> rootIds) {
     }
 }

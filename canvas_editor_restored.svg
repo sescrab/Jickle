@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1496" height="984" viewBox="0 0 1496 984">
+  <defs>
+    <linearGradient id="buttonGloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="#FAFAF7"/>
+  <text x="28" y="18" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700" dominant-baseline="hanging" fill="#263238">Editor Canvas</text>
+  <rect x="44" y="104" width="360" height="254" rx="26" fill="#FFFDF8" stroke="#E0D8CC" stroke-width="1.5"/>
+  <text x="84" y="130" font-family="Segoe UI, sans-serif" font-size="12" font-weight="700" letter-spacing="1.6" fill="#8D6E63">CONTROL PANEL</text>
+  <line x1="84" y1="146" x2="400" y2="146" stroke="#EFE5D8" stroke-width="1"/>
+  <g data-layer="layer-controls" transform="translate(28 56)">
+<text x="56" y="96" font-family="Segoe UI, sans-serif" font-size="16" dominant-baseline="hanging" fill="#455A64">Saving disabled</text>
+<rect x="56" y="128" width="168" height="44" rx="14" fill="#FFE082" stroke="#6D4C41" stroke-width="2"/>
+<rect x="56" y="128" width="168" height="44" rx="14" fill="url(#buttonGloss)" opacity="0.18"/>
+<text x="76" y="152" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" dominant-baseline="middle" fill="#263238">Save layout</text>
+<rect x="56" y="180" width="24" height="24" rx="5" fill="#FFE082" stroke="#6D4C41" stroke-width="2"/>
+<path d="M 61 192 L 67 198 L 75 186" fill="none" stroke="#1B5E20" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="100" y="182" font-family="Segoe UI, sans-serif" font-size="16" dominant-baseline="hanging" fill="#455A64">Enable snap</text>
+<circle cx="316" cy="152" r="34" fill="#FFF8E1" stroke="#E6D4B8" stroke-width="1"/>
+<circle cx="316" cy="152" r="28" fill="#FFE082" stroke="#6D4C41" stroke-width="2"/>
+<line x1="316" y1="152" x2="322.89" y2="168.63" stroke="#263238" stroke-width="3" stroke-linecap="round"/>
+<text x="284" y="190" font-family="Segoe UI, sans-serif" font-size="15" font-weight="600" dominant-baseline="hanging" fill="#37474F">Editor mode</text>
+<circle cx="296" cy="224" r="10" fill="#FFFFFF" stroke="#455A64" stroke-width="1"/>
+<text x="314" y="224" font-family="Segoe UI, sans-serif" font-size="14" dominant-baseline="middle" fill="#37474F">Move</text>
+<circle cx="296" cy="254" r="10" fill="#FFFFFF" stroke="#6D4C41" stroke-width="2"/>
+<circle cx="296" cy="254" r="5" fill="#6D4C41"/>
+<text x="314" y="254" font-family="Segoe UI, sans-serif" font-size="14" dominant-baseline="middle" fill="#37474F">Edit</text>
+  </g>
+  <g data-layer="layer-overlay" transform="translate(28 56)">
+<rect x="520" y="72" width="640" height="480" rx="24" fill="#CFD8DC" stroke="#455A64" stroke-width="1"/>
+<circle cx="580" cy="144" r="18" fill="#FFE082" stroke="#6D4C41" stroke-width="2"/>
+  </g>
+</svg>

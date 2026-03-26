@@ -1,6 +1,15 @@
 package org.example.jickle;
 
-import org.example.additional.Person;
+import org.example.additional.CanvasDomain;
+import org.example.additional.CanvasDomain.ButtonWidget;
+import org.example.additional.CanvasDomain.CanvasDocument;
+import org.example.additional.CanvasDomain.CheckBoxWidget;
+import org.example.additional.CanvasDomain.LabelWidget;
+import org.example.additional.CanvasDomain.RadioButtonWidget;
+import org.example.additional.CanvasDomain.RadioGroupWidget;
+import org.example.additional.CanvasDomain.SharedStyle;
+import org.example.additional.CanvasDomain.Widget;
+import org.example.additional.CanvasSvgRenderer;
 import org.example.jickle.annotation.JicklableClass;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,18 +18,17 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Comparator;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.Queue;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -51,179 +59,186 @@ class JickleTest {
     }
 
     @Test
-    void roundTripsObjectTreeWithListFieldsAndSharedReferences() throws Exception {
-        Person founder = new Person(60, "Founder", null);
-        Person manager = new Person(35, "Manager", founder);
-        Person devOne = new Person(28, "Dev One", manager);
-        Person devTwo = new Person(26, "Dev Two", manager);
+    void roundTripsCanvasDocumentWithCyclesAndSharedReferences() throws Exception {
+        CanvasDocument original = CanvasDomain.createEditorCanvas();
 
-        OrgUnit platform = new OrgUnit(
-                "Platform",
-                manager,
-                List.of(manager, devOne, devTwo),
-                List.of(),
-                Map.of("backend", List.of(devOne, devTwo))
-        );
-
-        OrgUnit company = new OrgUnit(
-                "Company",
-                founder,
-                List.of(founder, manager),
-                List.of(platform),
-                Map.of("leadership", List.of(founder, manager))
-        );
-
-        Path file = tempDir.resolve("org-tree.json");
-        serializer.dump(company, file.toString());
-
-        OrgUnit restored = (OrgUnit) deserializer.load(file.toString()).get(0);
-        OrgUnit restoredPlatform = restored.children.get(0);
-
-        assertEquals("Company", restored.name);
-        assertEquals(1, restored.children.size());
-        assertEquals("Platform", restoredPlatform.name);
-        assertEquals(2, restored.members.size());
-        assertEquals(3, restoredPlatform.members.size());
-        assertEquals(2, restoredPlatform.squads.get("backend").size());
-
-        assertSame(restored.lead, restored.members.get(0));
-        assertSame(restored.members.get(1), restoredPlatform.lead);
-        assertSame(restoredPlatform.members.get(1), restoredPlatform.squads.get("backend").get(0));
-        assertSame(restoredPlatform.members.get(2), restoredPlatform.squads.get("backend").get(1));
-        assertSame(restored.members.get(1), restoredPlatform.members.get(0));
-    }
-
-    @Test
-    void roundTripsCustomCollectionWithOwnField() throws Exception {
-        TaggedPeople original = new TaggedPeople("core-team", List.of(
-                new Person(30, "Alice", null),
-                new Person(31, "Bob", null)
-        ));
-
-        Path file = tempDir.resolve("tagged-people.json");
+        Path file = tempDir.resolve("canvas.json");
         serializer.dump(original, file.toString());
 
-        Object restoredObject = deserializer.load(file.toString()).get(0);
-        TaggedPeople restored = assertInstanceOf(TaggedPeople.class, restoredObject);
+        CanvasDocument restored = assertInstanceOf(CanvasDocument.class, deserializer.load(file.toString()).getFirst());
 
-        assertEquals("core-team", restored.label);
-        assertEquals(2, restored.size());
-        assertEquals("Alice", restored.get(0).name);
-        assertEquals("Bob", restored.get(1).name);
+        assertEquals("Editor Canvas", restored.name);
+        assertEquals(2, restored.layers.size());
+        assertEquals(10, restored.elementsById.size());
+        assertTrue(restored.layers instanceof LinkedList);
+        assertTrue(restored.navigationOrder instanceof LinkedList);
+        assertTrue(restored.selection instanceof LinkedList);
+
+        ButtonWidget saveButton = assertInstanceOf(ButtonWidget.class, restored.elementsById.get("btn-save"));
+        LabelWidget statusLabel = assertInstanceOf(LabelWidget.class, restored.elementsById.get("label-status"));
+        CheckBoxWidget snapCheckbox = assertInstanceOf(CheckBoxWidget.class, restored.elementsById.get("check-snap"));
+        LabelWidget snapLabel = assertInstanceOf(LabelWidget.class, restored.elementsById.get("label-snap"));
+        RadioGroupWidget modeGroup = assertInstanceOf(RadioGroupWidget.class, restored.elementsById.get("group-mode"));
+        RadioButtonWidget editMode = assertInstanceOf(RadioButtonWidget.class, restored.elementsById.get("radio-edit"));
+        SharedStyle accent = restored.accentStyle;
+
+        assertSame(restored.layers.getFirst().document, restored);
+        assertSame(restored.layers.getFirst().mirrorLayer, restored.layers.get(1));
+        assertSame(saveButton.statusLabel, statusLabel);
+        assertSame(statusLabel.owner, saveButton);
+        assertSame(snapCheckbox.label, snapLabel);
+        assertSame(snapLabel.owner, snapCheckbox);
+        assertSame(modeGroup.selected, editMode);
+        assertSame(modeGroup.options.getLast(), editMode);
+        assertSame(editMode.group, modeGroup);
+        assertSame(restored.focusedWidget, saveButton);
+        assertSame(restored.selection.getFirst(), saveButton);
+        assertSame(restored.navigationOrder.peek(), saveButton);
+        assertSame(saveButton.style, accent);
+        assertSame(assertInstanceOf(CheckBoxWidget.class, restored.navigationOrder.stream().skip(1).findFirst().orElseThrow()).style, accent);
     }
 
     @Test
-    void roundTripsArraysAndGenericCollections() throws Exception {
-        int[] numbers = {1, 2, 3, 4};
-        Set<String> tags = new LinkedHashSet<>(List.of("alpha", "beta"));
+    void roundTripsLinkedListQueueAsRootContainer() throws Exception {
+        CanvasDocument original = CanvasDomain.createEditorCanvas();
 
-        Path numbersFile = tempDir.resolve("numbers.json");
-        serializer.dump(numbers, numbersFile.toString());
-        int[] restoredNumbers = (int[]) deserializer.load(numbersFile.toString()).get(0);
-        assertArrayEquals(numbers, restoredNumbers);
+        Path file = tempDir.resolve("navigation.json");
+        serializer.dump(original.navigationOrder, file.toString());
 
-        Path tagsFile = tempDir.resolve("tags.json");
-        serializer.dump(tags, tagsFile.toString());
-        @SuppressWarnings("unchecked")
-        Set<String> restoredTags = (Set<String>) deserializer.load(tagsFile.toString()).get(0);
+        Queue<?> restored = assertInstanceOf(LinkedList.class, deserializer.load(file.toString()).getFirst());
+        assertEquals(5, restored.size());
 
-        assertEquals(tags, restoredTags);
-        assertTrue(restoredTags instanceof LinkedHashSet);
+        Widget first = (Widget) restored.peek();
+        ButtonWidget firstButton = assertInstanceOf(ButtonWidget.class, first);
+        assertEquals("btn-save", firstButton.id);
     }
 
     @Test
-    void filtersDumpListByNestedListPath() throws Exception {
-        Person alice = new Person(30, "Alice", null);
-        Person bob = new Person(27, "Bob", alice);
-        Person carol = new Person(25, "Carol", null);
+    void roundTripsWidgetMapAsRootContainerAndPreservesSharedInstances() throws Exception {
+        CanvasDocument original = CanvasDomain.createEditorCanvas();
 
-        OrgUnit alpha = new OrgUnit("Alpha", alice, List.of(alice, bob), List.of(), Map.of());
-        OrgUnit beta = new OrgUnit("Beta", carol, List.of(carol), List.of(), Map.of());
+        Path file = tempDir.resolve("widget-map.json");
+        serializer.dump(original.elementsById, file.toString());
 
-        Path file = tempDir.resolve("filtered.json");
-        serializer.dumpList(List.of(alpha, beta), file.toString());
+        Map<?, ?> restored = assertInstanceOf(LinkedHashMap.class, deserializer.load(file.toString()).getFirst());
+        assertEquals(10, restored.size());
 
-        List<Object> restored = deserializer.load(file.toString(), JickleFilter.eq("members.0.name", "Alice"));
-        assertEquals(1, restored.size());
-
-        OrgUnit restoredAlpha = assertInstanceOf(OrgUnit.class, restored.get(0));
-        assertEquals("Alpha", restoredAlpha.name);
-        assertEquals(2, restoredAlpha.members.size());
-        assertSame(restoredAlpha.lead, restoredAlpha.members.get(0));
+        ButtonWidget saveButton = assertInstanceOf(ButtonWidget.class, restored.get("btn-save"));
+        LabelWidget statusLabel = assertInstanceOf(LabelWidget.class, restored.get("label-status"));
+        assertSame(saveButton.statusLabel, statusLabel);
     }
 
     @Test
-    void keepsExistingJsonMarkersForReferencesAndContainers() throws Exception {
-        Person parent = new Person(50, "Parent", null);
-        Person child = new Person(20, "Child", parent);
-        OrgUnit unit = new OrgUnit("Ops", child, List.of(child), List.of(), Map.of());
+    void filtersCanvasDocumentsByNestedReferenceAndContainerPath() throws Exception {
+        CanvasDocument editor = CanvasDomain.createEditorCanvas();
+        CanvasDocument dashboard = CanvasDomain.createDashboardCanvas();
 
-        Path file = tempDir.resolve("markers.json");
-        serializer.dump(unit, file.toString());
+        Path file = tempDir.resolve("canvas-list.json");
+        serializer.dumpList(List.of(editor, dashboard), file.toString());
+
+        List<Object> filtered = deserializer.load(
+                file.toString(),
+                JickleFilter.and(
+                        JickleFilter.eq("focusedWidget.id", "btn-save"),
+                        JickleFilter.eq("activeGroup.options.1.checked", true)
+                )
+        );
+
+        assertEquals(1, filtered.size());
+        CanvasDocument restored = assertInstanceOf(CanvasDocument.class, filtered.getFirst());
+        assertEquals("Editor Canvas", restored.name);
+        assertEquals("btn-save", assertInstanceOf(ButtonWidget.class, restored.focusedWidget).id);
+        assertEquals("Edit", restored.activeGroup.options.getLast().caption);
+    }
+
+    @Test
+    void roundTripsWidgetInterfaceArrayWithMixedConcreteTypes() throws Exception {
+        CanvasDocument document = CanvasDomain.createEditorCanvas();
+        Widget[] original = {
+                document.elementsById.get("btn-save"),
+                document.elementsById.get("label-status"),
+                document.elementsById.get("group-mode")
+        };
+
+        Path file = tempDir.resolve("widget-array.json");
+        serializer.dump(original, file.toString());
+
+        Widget[] restored = assertInstanceOf(Widget[].class, deserializer.load(file.toString()).getFirst());
+        assertEquals(3, restored.length);
+        assertInstanceOf(ButtonWidget.class, restored[0]);
+        assertInstanceOf(LabelWidget.class, restored[1]);
+        assertInstanceOf(RadioGroupWidget.class, restored[2]);
+        assertSame(((ButtonWidget) restored[0]).statusLabel, restored[1]);
+    }
+
+    @Test
+    void keepsPrettyPrintedMarkersInJsonOutput() throws Exception {
+        CanvasDocument document = CanvasDomain.createEditorCanvas();
+
+        Path file = tempDir.resolve("pretty.json");
+        serializer.dump(document, file.toString());
 
         String json = Files.readString(file);
-        assertTrue(json.contains("\"object_lead\":"));
-        assertTrue(json.contains("\"object_members\":"));
-        assertTrue(json.contains("\"is_container\":true"));
-        assertTrue(json.contains("\"collection_class\":\"java.util.ImmutableCollections$List12\"")
-                || json.contains("\"collection_class\":\"java.util.ImmutableCollections$ListN\"")
-                || json.contains("\"collection_class\":\"java.util.Arrays$ArrayList\""));
+        assertTrue(json.contains(System.lineSeparator() + "  ["));
+        assertTrue(json.contains("\"object_focusedWidget\": "));
+        assertTrue(json.contains("\"is_container\": true"));
+        assertTrue(json.contains(System.lineSeparator() + "        \"elements\": ["));
     }
 
     @Test
-    void respectsJickleIgnoreAnnotation() throws Exception {
-        Person person = new Person(30, "SecretGuy", null);
+    void rendersOriginalAndRestoredCanvasToComparableSvg() throws Exception {
+        CanvasDocument original = CanvasDomain.createEditorCanvas();
 
-        Path file = tempDir.resolve("ignore.json");
-        serializer.dump(person, file.toString());
+        Path file = tempDir.resolve("canvas-svg.json");
+        serializer.dump(original, file.toString());
+        CanvasDocument restored = assertInstanceOf(CanvasDocument.class, deserializer.load(file.toString()).getFirst());
 
-        String json = Files.readString(file);
-        assertFalse(json.contains("bitcoin_wallet_password"));
+        String originalSvg = CanvasSvgRenderer.render(original);
+        String restoredSvg = CanvasSvgRenderer.render(restored);
+
+        assertTrue(originalSvg.contains("<svg"));
+        assertTrue(restoredSvg.contains("<svg"));
+        assertTrue(originalSvg.contains("Save layout"));
+        assertTrue(restoredSvg.contains("Save layout"));
+        assertTrue(originalSvg.contains("Editor mode"));
+        assertTrue(restoredSvg.contains("Editor mode"));
+        assertTrue(originalSvg.contains("circle"));
+        assertTrue(restoredSvg.contains("circle"));
     }
 
     @Test
-    void rejectsNonJicklableUserClassWhenUnsafeDisabled() {
-        class BadBox {
-            List<String> names = List.of("x", "y");
+    void rejectsNonAnnotatedUserClassWhenUnsafeDisabled() {
+        class BadCanvas {
+            public Queue<String> names = new LinkedList<>(List.of("one", "two"));
         }
 
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () ->
-                serializer.dump(new BadBox(), tempDir.resolve("bad.json").toString())
+                serializer.dump(new BadCanvas(), tempDir.resolve("bad.json").toString())
         );
 
         assertTrue(exception.getMessage().contains("@JicklableClass"));
     }
 
-    @JicklableClass
-    static class OrgUnit {
-        public String name;
-        public Person lead;
-        public List<Person> members;
-        public List<OrgUnit> children;
-        public Map<String, List<Person>> squads;
+    @Test
+    void preservesCustomQueueImplementationInInterfaceField() throws Exception {
+        CanvasDocument original = CanvasDomain.createEditorCanvas();
+        QueueHolder holder = new QueueHolder();
+        holder.name = "navigation";
+        holder.widgets = new LinkedList<>(original.navigationOrder);
 
-        public OrgUnit() {
-        }
+        Path file = tempDir.resolve("queue-holder.json");
+        serializer.dump(holder, file.toString());
 
-        OrgUnit(String name, Person lead, List<Person> members, List<OrgUnit> children, Map<String, List<Person>> squads) {
-            this.name = name;
-            this.lead = lead;
-            this.members = members;
-            this.children = children;
-            this.squads = squads;
-        }
+        QueueHolder restored = assertInstanceOf(QueueHolder.class, deserializer.load(file.toString()).getFirst());
+        assertNotNull(restored.widgets);
+        assertTrue(restored.widgets instanceof LinkedList);
+        assertEquals(5, restored.widgets.size());
+        assertEquals("btn-save", assertInstanceOf(ButtonWidget.class, restored.widgets.peek()).id);
     }
 
     @JicklableClass
-    static class TaggedPeople extends ArrayList<Person> {
-        public String label;
-
-        public TaggedPeople() {
-        }
-
-        TaggedPeople(String label, Collection<Person> people) {
-            this.label = label;
-            addAll(people);
-        }
+    static class QueueHolder {
+        public String name;
+        public Queue<Widget> widgets;
     }
 }

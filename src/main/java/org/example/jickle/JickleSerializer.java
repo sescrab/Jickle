@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.core.util.DefaultIndenter;
+import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 import org.example.jickle.annotation.JickleIgnore;
 import org.example.jickle.annotation.JicklableClass;
 
@@ -24,10 +26,12 @@ public class JickleSerializer {
 
     private final ObjectMapper mapper;
     private final boolean allowUnsafe;
+    private final DefaultPrettyPrinter prettyPrinter;
 
     public JickleSerializer(boolean allowUnsafe) {
         this.allowUnsafe = allowUnsafe;
         this.mapper = new ObjectMapper();
+        this.prettyPrinter = createPrettyPrinter();
 
         mapper.enable(SerializationFeature.INDENT_OUTPUT);
         mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
@@ -80,10 +84,17 @@ public class JickleSerializer {
         root.add(mainArray);
         root.add(additionalArray);
 
-        String json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
-        json = json.replaceAll("\\s*:\\s*", ":");
-
+        String json = mapper.writer(prettyPrinter).writeValueAsString(root);
+        json = json.replace(" : ", ": ");
         Files.writeString(Path.of(filePath), json, StandardCharsets.UTF_8);
+    }
+
+    private DefaultPrettyPrinter createPrettyPrinter() {
+        DefaultPrettyPrinter printer = new DefaultPrettyPrinter();
+        DefaultIndenter indenter = new DefaultIndenter("  ", DefaultIndenter.SYS_LF);
+        printer.indentObjectsWith(indenter);
+        printer.indentArraysWith(indenter);
+        return printer;
     }
 
     private void writeEmptyResult(String filePath) throws IOException {
