@@ -6,16 +6,37 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.example.jickle.annotation.JicklableClass;
 
-import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.*;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 public class JickleDeserializer {
+
+    private static final Set<String> CONTAINER_METADATA_KEYS = Set.of(
+            "is_container",
+            "component_type",
+            "collection_class",
+            "elements",
+            "entries"
+    );
 
     private final ObjectMapper mapper;
     private final boolean allowUnsafe;
@@ -25,241 +46,295 @@ public class JickleDeserializer {
         this.mapper = new ObjectMapper();
     }
 
-    //Поддержка старого формата загрузки (без фильтрации)
     public List<Object> load(String filePath) throws IOException, ClassNotFoundException, IllegalAccessException {
         return load(filePath, null);
     }
 
-    //Загрузка с фильтрацией
-    //Подгружаются только те объекты из главного списка, которые удовлетворяют построенному фильтру
-    //А также те, которые нужны для них (на которые ссылаются)
-    //Хотя сами java-объекты создаются только для тех, которые прошли фильтр, но загрузить приходится все равно весь фаил...
     public List<Object> load(String filePath, JickleFilter filter)
             throws IOException, ClassNotFoundException, IllegalAccessException {
-
-        // 1. Читаем JSON
-        String jsonContent = Files.readString(new File(filePath).toPath(), StandardCharsets.UTF_8);
-        JsonNode rootNode = mapper.readTree(jsonContent);
-
+        JsonNode rootNode = mapper.readTree(Files.readString(Path.of(filePath), StandardCharsets.UTF_8));
         if (!rootNode.isArray() || rootNode.size() != 2) {
             throw new IllegalArgumentException("Invalid format: root must be an array [main, additional]");
         }
 
-        ArrayNode mainArray = (ArrayNode) rootNode.get(0);
-        ArrayNode additionalArray = (ArrayNode) rootNode.get(1);
+        ArrayNode mainArray = asArray(rootNode.get(0), "main");
+        ArrayNode additionalArray = asArray(rootNode.get(1), "additional");
 
-        List<ObjectNode> allObjNodes = new ArrayList<>();
-        addAndValidateObjects(mainArray, allObjNodes);
-        addAndValidateObjects(additionalArray, allObjNodes);
+        List<ObjectNode> mainNodes = readObjectNodes(mainArray);
+        List<ObjectNode> additionalNodes = readObjectNodes(additionalArray);
+        List<ObjectNode> allNodes = Stream.concat(mainNodes.stream(), additionalNodes.stream()).toList();
 
-        Map<String, ObjectNode> idToNode = new HashMap<>();
-        for (ObjectNode n : allObjNodes) {
-            idToNode.put(n.get("id").asText(), n);
-        }
+        Map<String, ObjectNode> idToNode = allNodes.stream()
+                .collect(Collectors.toMap(node -> node.get("id").asText(), node -> node, (left, right) -> left, LinkedHashMap::new));
 
-        // 2. Применяем фильтр к объектам главного списка
-        List<ObjectNode> matchingRootNodes = new ArrayList<>();
-        for (JsonNode node : mainArray) {
-            ObjectNode objNode = (ObjectNode) node;
-            if (filter == null || filter.matches(objNode, idToNode)) {
-                matchingRootNodes.add(objNode);
-            }
-        }
-
-        if (matchingRootNodes.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        // 3. Находим все необходимые объекты, чтобы не было висячих ссылок
-        Set<String> reachableIds = collectReachableIds(matchingRootNodes, idToNode);
-
-        List<ObjectNode> objectsToProcess = allObjNodes.stream()
-                .filter(n -> reachableIds.contains(n.get("id").asText()))
+        List<ObjectNode> matchingRootNodes = mainNodes.stream()
+                .filter(node -> filter == null || filter.matches(node, idToNode))
                 .toList();
 
-        // 4. Создаём экземпляры объектов, прошедших фильтрацию (и на которые те ссылаются
-        Map<String, Object> idToInstance = new HashMap<>();
-        for (ObjectNode objNode : objectsToProcess) {
-            String id = objNode.get("id").asText();
-            ObjectNode dataNode = (ObjectNode) objNode.get("data");
-            boolean isContainer = dataNode.has("is_container") && dataNode.get("is_container").asBoolean();
+        if (matchingRootNodes.isEmpty()) {
+            return List.of();
+        }
 
-            Class<?> clazz = getClassFromHumanReadableName(objNode.get("class_name").asText());
+        Set<String> reachableIds = collectReachableIds(matchingRootNodes, idToNode);
+        List<ObjectNode> nodesToProcess = allNodes.stream()
+                .filter(node -> reachableIds.contains(node.get("id").asText()))
+                .toList();
 
-            if (!allowUnsafe && !isContainer && !clazz.isAnnotationPresent(JicklableClass.class)) {
-                throw new IllegalArgumentException("Class " + clazz.getName() + " is not annotated with @JicklableClass");
-            }
+        Map<String, Object> idToInstance = new LinkedHashMap<>();
+        for (ObjectNode node : nodesToProcess) {
+            String id = node.get("id").asText();
+            ObjectNode dataNode = asObject(node.get("data"), "data");
+            Class<?> clazz = getClassFromHumanReadableName(node.get("class_name").asText());
+            boolean isContainer = isContainer(dataNode);
 
-            Object instance = isContainer ? createContainerInstance(dataNode) : createInstance(clazz);
+            validateClass(clazz);
+            Object instance = isContainer ? createContainerInstance(clazz, dataNode) : createInstance(clazz);
             idToInstance.put(id, instance);
         }
 
-        // 5. Заполняем поля
-        for (ObjectNode objNode : objectsToProcess) {
-            String id = objNode.get("id").asText();
+        for (ObjectNode node : nodesToProcess) {
+            String id = node.get("id").asText();
             Object instance = idToInstance.get(id);
-            ObjectNode dataNode = (ObjectNode) objNode.get("data");
-            boolean isContainer = dataNode.has("is_container") && dataNode.get("is_container").asBoolean();
+            ObjectNode dataNode = asObject(node.get("data"), "data");
 
-            if (isContainer) {
+            if (isContainer(dataNode)) {
                 fillContainer(instance, dataNode, idToInstance);
-            } else {
-                fillObject(instance, dataNode, idToInstance);
             }
+            fillObjectFields(instance, dataNode, idToInstance);
         }
 
-        // 6. Возвращаем только собственно объекты, прошедшие фильтрацию
-        List<Object> result = new ArrayList<>();
-        for (ObjectNode node : matchingRootNodes) {
-            result.add(idToInstance.get(node.get("id").asText()));
+        return matchingRootNodes.stream()
+                .map(node -> idToInstance.get(node.get("id").asText()))
+                .toList();
+    }
+
+    private ArrayNode asArray(JsonNode node, String label) {
+        if (node instanceof ArrayNode arrayNode) {
+            return arrayNode;
         }
-        return result;
+        throw new IllegalArgumentException("Invalid format: " + label + " must be an array");
+    }
+
+    private ObjectNode asObject(JsonNode node, String label) {
+        if (node instanceof ObjectNode objectNode) {
+            return objectNode;
+        }
+        throw new IllegalArgumentException("Invalid format: " + label + " must be an object");
+    }
+
+    private List<ObjectNode> readObjectNodes(ArrayNode arrayNode) {
+        return stream(arrayNode)
+                .filter(JsonNode::isObject)
+                .map(node -> (ObjectNode) node)
+                .toList();
+    }
+
+    private Stream<JsonNode> stream(ArrayNode arrayNode) {
+        return StreamSupport.stream(arrayNode.spliterator(), false);
     }
 
     private Set<String> collectReachableIds(List<ObjectNode> roots, Map<String, ObjectNode> idToNode) {
-        Set<String> reachable = new HashSet<>();
-        for (ObjectNode root : roots) {
-            collectReachable(root, idToNode, reachable);
-        }
+        Set<String> reachable = new LinkedHashSet<>();
+        roots.forEach(root -> collectReachable(root, idToNode, reachable));
         return reachable;
     }
 
     private void collectReachable(ObjectNode node, Map<String, ObjectNode> idToNode, Set<String> reachable) {
         String id = node.get("id").asText();
-        if (reachable.contains(id)) return;
-        reachable.add(id);
+        if (!reachable.add(id)) {
+            return;
+        }
 
-        ObjectNode data = (ObjectNode) node.get("data");
-        boolean isContainer = data.has("is_container") && data.get("is_container").asBoolean();
+        Set<String> referencedIds = new LinkedHashSet<>();
+        collectReferenceIds(asObject(node.get("data"), "data"), referencedIds);
+        referencedIds.stream()
+                .map(idToNode::get)
+                .filter(java.util.Objects::nonNull)
+                .forEach(target -> collectReachable(target, idToNode, reachable));
+    }
 
-        if (isContainer) {
-            if (data.has("elements")) {
-                for (JsonNode e : (ArrayNode) data.get("elements")) {
-                    if (JickleFilter.isReference(e)) {  // используем статический метод из фильтра
-                        String refId = JickleFilter.extractRefId(e);
-                        ObjectNode target = idToNode.get(refId);
-                        if (target != null) collectReachable(target, idToNode, reachable);
-                    }
+    private void collectReferenceIds(JsonNode node, Set<String> referencedIds) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (JickleFilter.isReference(node)) {
+            referencedIds.add(JickleFilter.extractRefId(node));
+            return;
+        }
+        if (node.isArray()) {
+            node.forEach(child -> collectReferenceIds(child, referencedIds));
+            return;
+        }
+        if (node.isObject()) {
+            node.fields().forEachRemaining(entry -> {
+                if (entry.getKey().startsWith("object_") && !entry.getValue().isNull()) {
+                    referencedIds.add(JickleFilter.extractRefId(entry.getValue()));
+                    return;
                 }
-            } else if (data.has("entries")) {
-                for (JsonNode pairNode : (ArrayNode) data.get("entries")) {
-                    ArrayNode pair = (ArrayNode) pairNode;
-                    for (JsonNode item : pair) {
-                        if (JickleFilter.isReference(item)) {
-                            String refId = JickleFilter.extractRefId(item);
-                            ObjectNode target = idToNode.get(refId);
-                            if (target != null) collectReachable(target, idToNode, reachable);
-                        }
-                    }
-                }
-            }
-        } else {
-            for (Iterator<Map.Entry<String, JsonNode>> it = data.fields(); it.hasNext(); ) {
-                JsonNode val = it.next().getValue();
-                if (JickleFilter.isReference(val)) {
-                    String refId = JickleFilter.extractRefId(val);
-                    ObjectNode target = idToNode.get(refId);
-                    if (target != null) collectReachable(target, idToNode, reachable);
-                }
-            }
+                collectReferenceIds(entry.getValue(), referencedIds);
+            });
         }
     }
 
-    private Object createContainerInstance(ObjectNode dataNode) throws ClassNotFoundException {
-        if (dataNode.has("component_type")) {
-            String compName = dataNode.get("component_type").asText();
-            Class<?> compClass = getClassByName(compName);
-            int length = dataNode.get("elements").size();
-            return Array.newInstance(compClass, length);
-        } else {
-            String collClass = dataNode.get("collection_class").asText();
-            if (collClass.contains("List") || collClass.contains("ImmutableCollections")) {
-                return new ArrayList<>();
-            } else if (collClass.contains("HashMap")) {
-                return new HashMap<>();
+    private boolean isContainer(ObjectNode dataNode) {
+        return dataNode.path("is_container").asBoolean(false);
+    }
+
+    private void validateClass(Class<?> clazz) {
+        if (allowUnsafe || clazz.isArray() || isJdkContainer(clazz) || clazz.isAnnotationPresent(JicklableClass.class)) {
+            return;
+        }
+
+        throw new IllegalArgumentException("Class " + clazz.getName() + " is not annotated with @JicklableClass");
+    }
+
+    private boolean isJdkContainer(Class<?> clazz) {
+        return (Collection.class.isAssignableFrom(clazz) || Map.class.isAssignableFrom(clazz)) && isJdkClass(clazz);
+    }
+
+    private boolean isJdkClass(Class<?> clazz) {
+        Package pkg = clazz.getPackage();
+        String packageName = pkg == null ? "" : pkg.getName();
+        return packageName.startsWith("java.") ||
+                packageName.startsWith("javax.") ||
+                packageName.startsWith("jdk.");
+    }
+
+    private Object createContainerInstance(Class<?> clazz, ObjectNode dataNode) throws ClassNotFoundException {
+        if (clazz.isArray()) {
+            String componentTypeName = dataNode.get("component_type").asText();
+            Class<?> componentType = getClassByName(componentTypeName);
+            int length = dataNode.path("elements").size();
+            return Array.newInstance(componentType, length);
+        }
+
+        Object directInstance = tryCreateInstance(clazz);
+        if (directInstance != null) {
+            return directInstance;
+        }
+
+        if (Map.class.isAssignableFrom(clazz)) {
+            return new LinkedHashMap<>();
+        }
+        if (Set.class.isAssignableFrom(clazz)) {
+            return new LinkedHashSet<>();
+        }
+        if (Deque.class.isAssignableFrom(clazz) || Queue.class.isAssignableFrom(clazz)) {
+            return new ArrayDeque<>();
+        }
+        if (Collection.class.isAssignableFrom(clazz)) {
+            return new ArrayList<>();
+        }
+
+        throw new IllegalArgumentException("Unsupported container: " + clazz.getName());
+    }
+
+    private Object tryCreateInstance(Class<?> clazz) {
+        try {
+            Constructor<?> constructor = clazz.getDeclaredConstructor();
+            if (!constructor.canAccess(null) && !constructor.trySetAccessible()) {
+                return null;
             }
-            throw new IllegalArgumentException("Unsupported collection: " + collClass);
+            return constructor.newInstance();
+        } catch (Exception ignored) {
+            return null;
         }
     }
 
+    @SuppressWarnings("unchecked")
     private void fillContainer(Object instance, ObjectNode dataNode, Map<String, Object> idToInstance) {
-        if (dataNode.has("component_type")) {
-            // массив
-            ArrayNode elements = (ArrayNode) dataNode.get("elements");
-            for (int i = 0; i < elements.size(); i++) {
-                Object value = resolveValue(elements.get(i), Object.class, false, idToInstance);
-                Array.set(instance, i, value);
-            }
-        } else {
-            // коллекция или словарь
-            if (instance instanceof Collection) {
-                Collection<Object> coll = (Collection<Object>) instance;
-                ArrayNode els = (ArrayNode) dataNode.get("elements");
-                for (JsonNode e : els) {
-                    coll.add(resolveValue(e, Object.class, false, idToInstance));
-                }
-            } else if (instance instanceof Map) {
-                Map<Object, Object> map = (Map<Object, Object>) instance;
-                ArrayNode entries = (ArrayNode) dataNode.get("entries");
-                for (JsonNode p : entries) {
-                    ArrayNode pair = (ArrayNode) p;
-                    Object k = resolveValue(pair.get(0), Object.class, false, idToInstance);
-                    Object v = resolveValue(pair.get(1), Object.class, false, idToInstance);
-                    map.put(k, v);
-                }
-            }
+        if (instance.getClass().isArray()) {
+            fillArray(instance, dataNode.path("elements"), idToInstance);
+            return;
+        }
+
+        if (instance instanceof Map<?, ?> map) {
+            fillMap((Map<Object, Object>) map, dataNode.path("entries"), idToInstance);
+            return;
+        }
+
+        if (instance instanceof Collection<?> collection) {
+            fillCollection((Collection<Object>) collection, dataNode.path("elements"), idToInstance);
         }
     }
 
-    private void fillObject(Object instance, ObjectNode dataNode, Map<String, Object> idToInstance) throws IllegalAccessException {
+    private void fillArray(Object array, JsonNode elementsNode, Map<String, Object> idToInstance) {
+        Class<?> componentType = array.getClass().getComponentType();
+        ArrayNode elements = asArray(elementsNode, "elements");
+        for (int i = 0; i < elements.size(); i++) {
+            Array.set(array, i, resolveContainerValue(elements.get(i), componentType, idToInstance));
+        }
+    }
+
+    private void fillCollection(Collection<Object> collection, JsonNode elementsNode, Map<String, Object> idToInstance) {
+        ArrayNode elements = asArray(elementsNode, "elements");
+        elements.forEach(node -> collection.add(resolveContainerValue(node, Object.class, idToInstance)));
+    }
+
+    private void fillMap(Map<Object, Object> map, JsonNode entriesNode, Map<String, Object> idToInstance) {
+        ArrayNode entries = asArray(entriesNode, "entries");
+        entries.forEach(pairNode -> {
+            ArrayNode pair = asArray(pairNode, "entry");
+            Object key = resolveContainerValue(pair.get(0), Object.class, idToInstance);
+            Object value = resolveContainerValue(pair.get(1), Object.class, idToInstance);
+            map.put(key, value);
+        });
+    }
+
+    private void fillObjectFields(Object instance, ObjectNode dataNode, Map<String, Object> idToInstance) throws IllegalAccessException {
         Class<?> clazz = instance.getClass();
-        for (Iterator<Map.Entry<String, JsonNode>> it = dataNode.fields(); it.hasNext(); ) {
-            Map.Entry<String, JsonNode> entry = it.next();
+        var fields = dataNode.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> entry = fields.next();
             String key = entry.getKey();
-            JsonNode valNode = entry.getValue();
+            if (CONTAINER_METADATA_KEYS.contains(key)) {
+                continue;
+            }
 
             String fieldName = key.startsWith("object_") ? key.substring(7) : key;
             Field field = findField(clazz, fieldName);
-            if (field == null) continue;
+            if (field == null) {
+                continue;
+            }
+            if (!field.canAccess(instance) && !field.trySetAccessible()) {
+                continue;
+            }
 
-            field.setAccessible(true);
-            Object fieldValue = key.startsWith("object_")
-                    ? (valNode.isNull() ? null : idToInstance.get(valNode.asText()))
-                    : mapper.convertValue(valNode, field.getType());
+            Object value = key.startsWith("object_")
+                    ? idToInstance.get(JickleFilter.extractRefId(entry.getValue()))
+                    : mapper.convertValue(entry.getValue(), field.getType());
 
-            field.set(instance, fieldValue);
+            field.set(instance, value);
         }
     }
 
-    private Object resolveValue(JsonNode node, Class<?> type, boolean isSimple, Map<String, Object> idToInstance) {
-        if (node.isNull()) return null;
-        if (isSimple || !node.isTextual() || !node.textValue().startsWith("#")) {
-            return mapper.convertValue(node, type);
+    private Object resolveContainerValue(JsonNode node, Class<?> targetType, Map<String, Object> idToInstance) {
+        if (node == null || node.isNull()) {
+            return null;
         }
-        String ref = node.textValue().substring(1);
-        return idToInstance.get(ref);
-    }
-
-    private void addAndValidateObjects(ArrayNode arrayNode, List<ObjectNode> targetList) {
-        for (JsonNode node : arrayNode) {
-            if (node.isObject()) targetList.add((ObjectNode) node);
+        if (JickleFilter.isReference(node)) {
+            return idToInstance.get(JickleFilter.extractRefId(node));
         }
+        return mapper.convertValue(node, targetType);
     }
 
     private Object createInstance(Class<?> clazz) {
-        try {
-            Constructor<?> constructor = clazz.getDeclaredConstructor();
-            constructor.setAccessible(true);
-            return constructor.newInstance();
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Failed to create instance of " + clazz.getName(), e);
+        Object instance = tryCreateInstance(clazz);
+        if (instance != null) {
+            return instance;
         }
+        throw new IllegalArgumentException("Failed to create instance of " + clazz.getName());
     }
 
     private Field findField(Class<?> type, String fieldName) {
-        for (Class<?> c = type; c != null && c != Object.class; c = c.getSuperclass()) {
+        for (Class<?> current = type; current != null && current != Object.class; current = current.getSuperclass()) {
             try {
-                return c.getDeclaredField(fieldName);
+                Field field = current.getDeclaredField(fieldName);
+                int modifiers = field.getModifiers();
+                if (Modifier.isStatic(modifiers) || field.isSynthetic()) {
+                    continue;
+                }
+                return field;
             } catch (NoSuchFieldException ignored) {
             }
         }
@@ -283,24 +358,10 @@ public class JickleDeserializer {
     private Class<?> getClassFromHumanReadableName(String name) throws ClassNotFoundException {
         if (name.endsWith("[]")) {
             String componentName = name.substring(0, name.length() - 2);
-            Class<?> compClass = getClassFromHumanReadableName(componentName);
-            return Array.newInstance(compClass, 0).getClass();
+            Class<?> componentType = getClassFromHumanReadableName(componentName);
+            return Array.newInstance(componentType, 0).getClass();
         }
-        if (name.startsWith("[L") && name.endsWith(";")) {
-            String componentName = name.substring(2, name.length() - 1);
-            Class<?> compClass = Class.forName(componentName);
-            return Array.newInstance(compClass, 0).getClass();
-        }
-        return switch (name) {
-            case "int" -> int.class;
-            case "long" -> long.class;
-            case "double" -> double.class;
-            case "float" -> float.class;
-            case "boolean" -> boolean.class;
-            case "byte" -> byte.class;
-            case "short" -> short.class;
-            case "char" -> char.class;
-            default -> Class.forName(name);
-        };
+
+        return getClassByName(name);
     }
 }

@@ -5,11 +5,11 @@ import org.example.jickle.JickleDeserializer;
 import org.example.jickle.JickleFilter;
 import org.example.jickle.JickleSerializer;
 
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 public class Main {
     public static void main(String[] args) {
@@ -24,7 +24,7 @@ public class Main {
             System.out.println(unknown);
 
             List<Person> rebyata = List.of(dimandr);
-            List<Person> rebyatav2 = List.of(unknown, python_dev);
+            List<Person> rebyatav2 = List.of(unknown, python_dev, dimandr);
             Person[] semeyka = {python_dev, dimandr, unknown};
 
             JickleSerializer serializer = new JickleSerializer(false);
@@ -40,7 +40,7 @@ public class Main {
 
             JickleDeserializer deserializer = new JickleDeserializer(false);
             List<Object> result = deserializer.load("family.json");
-            JickleFilter adultsFilter = JickleFilter.ge("age", 18);
+            JickleFilter adultsFilter = JickleFilter.and(JickleFilter.ge("age", 18), JickleFilter.not(JickleFilter.eq("name", "Dimas")));
             List<Object> adults = deserializer.load("rebyata_list.json", adultsFilter);
             // family.json содержит массив Person[] как корневой объект
             Object[] deserializedArray = (Object[]) result.get(0);
