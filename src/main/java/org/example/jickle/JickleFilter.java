@@ -1,10 +1,8 @@
 package org.example.jickle;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.IntNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.util.Map;
 import java.util.Objects;
 
 public class JickleFilter {
@@ -15,72 +13,72 @@ public class JickleFilter {
         this.evaluator = evaluator;
     }
 
-    public boolean matches(ObjectNode objectNode, Map<String, ObjectNode> idToNode) {
-        return evaluator.test(objectNode, idToNode);
+    public boolean matches(ObjectNode node) {
+        return evaluator.test(normalizeDataNode(node));
     }
 
     @FunctionalInterface
     private interface Predicate {
-        boolean test(ObjectNode node, Map<String, ObjectNode> idToNode);
+        boolean test(ObjectNode dataNode);
     }
 
     public static JickleFilter eq(String path, Object value) {
-        return new JickleFilter((node, map) -> Objects.equals(resolvePath(node, path, map), value));
+        return new JickleFilter(dataNode -> Objects.equals(resolveDirectField(dataNode, path), value));
     }
 
     public static JickleFilter ne(String path, Object value) {
-        return new JickleFilter((node, map) -> !Objects.equals(resolvePath(node, path, map), value));
+        return new JickleFilter(dataNode -> !Objects.equals(resolveDirectField(dataNode, path), value));
     }
 
     public static JickleFilter gt(String path, Number value) {
-        return new JickleFilter((node, map) -> compare(resolvePath(node, path, map), value) > 0);
+        return new JickleFilter(dataNode -> compare(resolveDirectField(dataNode, path), value) > 0);
     }
 
     public static JickleFilter ge(String path, Number value) {
-        return new JickleFilter((node, map) -> compare(resolvePath(node, path, map), value) >= 0);
+        return new JickleFilter(dataNode -> compare(resolveDirectField(dataNode, path), value) >= 0);
     }
 
     public static JickleFilter lt(String path, Number value) {
-        return new JickleFilter((node, map) -> compare(resolvePath(node, path, map), value) < 0);
+        return new JickleFilter(dataNode -> compare(resolveDirectField(dataNode, path), value) < 0);
     }
 
     public static JickleFilter le(String path, Number value) {
-        return new JickleFilter((node, map) -> compare(resolvePath(node, path, map), value) <= 0);
+        return new JickleFilter(dataNode -> compare(resolveDirectField(dataNode, path), value) <= 0);
     }
 
     public static JickleFilter contains(String path, String substring) {
-        return new JickleFilter((node, map) -> {
-            Object value = resolvePath(node, path, map);
+        return new JickleFilter(dataNode -> {
+            Object value = resolveDirectField(dataNode, path);
             return value instanceof String stringValue && stringValue.contains(substring);
         });
     }
 
     public static JickleFilter startsWith(String path, String prefix) {
-        return new JickleFilter((node, map) -> {
-            Object value = resolvePath(node, path, map);
+        return new JickleFilter(dataNode -> {
+            Object value = resolveDirectField(dataNode, path);
             return value instanceof String stringValue && stringValue.startsWith(prefix);
         });
     }
 
     public static JickleFilter endsWith(String path, String suffix) {
-        return new JickleFilter((node, map) -> {
-            Object value = resolvePath(node, path, map);
+        return new JickleFilter(dataNode -> {
+            Object value = resolveDirectField(dataNode, path);
             return value instanceof String stringValue && stringValue.endsWith(suffix);
         });
     }
 
     public static JickleFilter isNull(String path) {
-        return new JickleFilter((node, map) -> resolvePath(node, path, map) == null);
+        return new JickleFilter(dataNode -> resolveDirectField(dataNode, path) == null);
     }
 
     public static JickleFilter notNull(String path) {
-        return new JickleFilter((node, map) -> resolvePath(node, path, map) != null);
+        return new JickleFilter(dataNode -> resolveDirectField(dataNode, path) != null);
     }
 
     public static JickleFilter and(JickleFilter... filters) {
-        return new JickleFilter((node, map) -> {
+        return new JickleFilter(dataNode -> {
             for (JickleFilter filter : filters) {
-                if (!filter.matches(node, map)) {
+                if (!filter.matches(dataNode)) {
                     return false;
                 }
             }
@@ -89,9 +87,9 @@ public class JickleFilter {
     }
 
     public static JickleFilter or(JickleFilter... filters) {
-        return new JickleFilter((node, map) -> {
+        return new JickleFilter(dataNode -> {
             for (JickleFilter filter : filters) {
-                if (filter.matches(node, map)) {
+                if (filter.matches(dataNode)) {
                     return true;
                 }
             }
@@ -100,84 +98,33 @@ public class JickleFilter {
     }
 
     public static JickleFilter not(JickleFilter filter) {
-        return new JickleFilter((node, map) -> !filter.matches(node, map));
+        return new JickleFilter(dataNode -> !filter.matches(dataNode));
     }
 
-    private static Object resolvePath(ObjectNode root, String path, Map<String, ObjectNode> idToNode) {
-        JsonNode current = root.get("data");
-        String[] parts = path.split("\\.");
-
-        for (int i = 0; i < parts.length; i++) {
-            Step step = resolveStep(current, parts[i]);
-            if (step == null || step.node == null || step.node.isNull()) {
-                return null;
-            }
-
-            boolean last = i == parts.length - 1;
-            if (step.reference) {
-                ObjectNode target = idToNode.get(extractRefId(step.node));
-                if (target == null) {
-                    return null;
-                }
-                if (last) {
-                    return target.get("data");
-                }
-                current = target.get("data");
-                continue;
-            }
-
-            if (last) {
-                return toJavaValue(step.node);
-            }
-            current = step.node;
+    private static ObjectNode normalizeDataNode(ObjectNode node) {
+        JsonNode data = node.get("data");
+        if (data instanceof ObjectNode objectNode) {
+            return objectNode;
         }
-
-        return null;
+        return node;
     }
 
-    private static Step resolveStep(JsonNode current, String pathPart) {
-        if (current instanceof ObjectNode objectNode) {
-            if (objectNode.has(pathPart)) {
-                return new Step(objectNode.get(pathPart), false);
-            }
-
-            String referenceKey = "object_" + pathPart;
-            if (objectNode.has(referenceKey)) {
-                return new Step(objectNode.get(referenceKey), true);
-            }
-
-            if (objectNode.path("is_container").asBoolean(false) && objectNode.has("elements")) {
-                if ("size".equals(pathPart)) {
-                    return new Step(IntNode.valueOf(objectNode.withArray("elements").size()), false);
-                }
-                Integer index = parseIndex(pathPart);
-                if (index != null && index >= 0 && index < objectNode.withArray("elements").size()) {
-                    JsonNode element = objectNode.withArray("elements").get(index);
-                    return new Step(element, isReference(element));
-                }
-            }
-
+    private static Object resolveDirectField(ObjectNode dataNode, String path) {
+        if (path == null || path.isBlank() || path.contains(".")) {
             return null;
         }
 
-        if (current.isArray()) {
-            Integer index = parseIndex(pathPart);
-            if (index == null || index < 0 || index >= current.size()) {
-                return null;
-            }
-            JsonNode element = current.get(index);
-            return new Step(element, isReference(element));
+        JsonNode directValue = dataNode.get(path);
+        if (directValue != null) {
+            return toJavaValue(directValue);
+        }
+
+        JsonNode referenceValue = dataNode.get("object_" + path);
+        if (referenceValue != null) {
+            return toJavaValue(referenceValue);
         }
 
         return null;
-    }
-
-    private static Integer parseIndex(String value) {
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
     }
 
     private static Object toJavaValue(JsonNode value) {
@@ -213,8 +160,5 @@ public class JickleFilter {
             return 0;
         }
         return Double.compare(number.doubleValue(), right.doubleValue());
-    }
-
-    private record Step(JsonNode node, boolean reference) {
     }
 }

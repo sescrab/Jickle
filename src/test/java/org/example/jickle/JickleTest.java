@@ -1,5 +1,7 @@
 package org.example.jickle;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.additional.CanvasDomain;
 import org.example.additional.CanvasDomain.ButtonWidget;
 import org.example.additional.CanvasDomain.CanvasDocument;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -35,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JickleTest {
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private JickleSerializer serializer;
     private JickleDeserializer deserializer;
     private Path tempDir;
@@ -99,26 +103,36 @@ class JickleTest {
     }
 
     @Test
-    void roundTripsLinkedListQueueAsRootContainer() throws Exception {
+    void serializesLinkedListAsRegularObjectAndRoundTripsQueueRoot() throws Exception {
         CanvasDocument original = CanvasDomain.createEditorCanvas();
 
         Path file = tempDir.resolve("navigation.json");
         serializer.dump(original.navigationOrder, file.toString());
 
+        JsonNode data = objectMapper.readTree(Files.readString(file)).get(0).get(0).get("data");
+        assertFalse(data.has("is_container"));
+        assertTrue(data.has("size"));
+        assertTrue(data.has("modCount"));
+        assertTrue(data.has("object_first"));
+        assertTrue(data.has("object_last"));
+
         Queue<?> restored = assertInstanceOf(LinkedList.class, deserializer.load(file.toString()).getFirst());
         assertEquals(5, restored.size());
-
-        Widget first = (Widget) restored.peek();
-        ButtonWidget firstButton = assertInstanceOf(ButtonWidget.class, first);
-        assertEquals("btn-save", firstButton.id);
+        assertEquals("btn-save", assertInstanceOf(ButtonWidget.class, restored.peek()).id);
     }
 
     @Test
-    void roundTripsWidgetMapAsRootContainerAndPreservesSharedInstances() throws Exception {
+    void serializesLinkedHashMapAsRegularObjectAndPreservesSharedInstances() throws Exception {
         CanvasDocument original = CanvasDomain.createEditorCanvas();
 
         Path file = tempDir.resolve("widget-map.json");
         serializer.dump(original.elementsById, file.toString());
+
+        JsonNode data = objectMapper.readTree(Files.readString(file)).get(0).get(0).get("data");
+        assertFalse(data.has("is_container"));
+        assertFalse(data.has("entries"));
+        assertTrue(data.has("size"));
+        assertTrue(data.has("object_table") || data.has("object_head"));
 
         Map<?, ?> restored = assertInstanceOf(LinkedHashMap.class, deserializer.load(file.toString()).getFirst());
         assertEquals(10, restored.size());
@@ -129,7 +143,24 @@ class JickleTest {
     }
 
     @Test
-    void filtersCanvasDocumentsByNestedReferenceAndContainerPath() throws Exception {
+    void serializesArrayListAsRegularObjectUsingTransientFields() throws Exception {
+        ArrayList<String> original = new ArrayList<>(List.of("one", "two", "three"));
+
+        Path file = tempDir.resolve("array-list.json");
+        serializer.dump(original, file.toString());
+
+        JsonNode data = objectMapper.readTree(Files.readString(file)).get(0).get(0).get("data");
+        assertFalse(data.has("is_container"));
+        assertTrue(data.has("size"));
+        assertTrue(data.has("modCount"));
+        assertTrue(data.has("object_elementData"));
+
+        ArrayList<?> restored = assertInstanceOf(ArrayList.class, deserializer.load(file.toString()).getFirst());
+        assertEquals(List.of("one", "two", "three"), restored);
+    }
+
+    @Test
+    void filtersCanvasDocumentsByDirectFieldsOnly() throws Exception {
         CanvasDocument editor = CanvasDomain.createEditorCanvas();
         CanvasDocument dashboard = CanvasDomain.createDashboardCanvas();
 
@@ -139,16 +170,28 @@ class JickleTest {
         List<Object> filtered = deserializer.load(
                 file.toString(),
                 JickleFilter.and(
-                        JickleFilter.eq("focusedWidget.id", "btn-save"),
-                        JickleFilter.eq("activeGroup.options.1.checked", true)
+                        JickleFilter.eq("name", "Editor Canvas"),
+                        JickleFilter.eq("width", 1440)
                 )
         );
 
         assertEquals(1, filtered.size());
         CanvasDocument restored = assertInstanceOf(CanvasDocument.class, filtered.getFirst());
         assertEquals("Editor Canvas", restored.name);
-        assertEquals("btn-save", assertInstanceOf(ButtonWidget.class, restored.focusedWidget).id);
-        assertEquals("Edit", restored.activeGroup.options.getLast().caption);
+        assertEquals(1440, restored.width);
+    }
+
+    @Test
+    void doesNotFollowReferencePathsDuringFiltering() throws Exception {
+        CanvasDocument editor = CanvasDomain.createEditorCanvas();
+        CanvasDocument dashboard = CanvasDomain.createDashboardCanvas();
+
+        Path file = tempDir.resolve("canvas-filter.json");
+        serializer.dumpList(List.of(editor, dashboard), file.toString());
+
+        List<Object> filtered = deserializer.load(file.toString(), JickleFilter.eq("focusedWidget.id", "btn-save"));
+
+        assertTrue(filtered.isEmpty());
     }
 
     @Test
@@ -172,15 +215,15 @@ class JickleTest {
     }
 
     @Test
-    void keepsPrettyPrintedMarkersInJsonOutput() throws Exception {
-        CanvasDocument document = CanvasDomain.createEditorCanvas();
+    void keepsPrettyPrintedJsonAndArrayMetadataForInternalArrays() throws Exception {
+        ArrayList<String> values = new ArrayList<>(List.of("one", "two"));
 
         Path file = tempDir.resolve("pretty.json");
-        serializer.dump(document, file.toString());
+        serializer.dump(values, file.toString());
 
         String json = Files.readString(file);
         assertTrue(json.contains(System.lineSeparator() + "  ["));
-        assertTrue(json.contains("\"object_focusedWidget\": "));
+        assertTrue(json.contains("\"object_elementData\": "));
         assertTrue(json.contains("\"is_container\": true"));
         assertTrue(json.contains(System.lineSeparator() + "        \"elements\": ["));
     }

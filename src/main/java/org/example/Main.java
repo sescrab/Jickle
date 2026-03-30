@@ -42,8 +42,8 @@ public class Main {
             List<Object> filteredDocuments = deserializer.load(
                     "canvas_documents.json",
                     JickleFilter.and(
-                            JickleFilter.eq("focusedWidget.id", "btn-save"),
-                            JickleFilter.eq("activeGroup.options.1.checked", true)
+                            JickleFilter.eq("name", "Editor Canvas"),
+                            JickleFilter.eq("width", 1440)
                     )
             );
 
@@ -51,7 +51,7 @@ public class Main {
 
             printSummary("Restored editor canvas", restoredEditor);
             System.out.println("Navigation queue type: " + restoredNavigation.getClass().getName());
-            System.out.println("Filtered documents count: " + filteredDocuments.size());
+            System.out.println("Filtered documents count (direct field filters only): " + filteredDocuments.size());
             System.out.println("SVG comparison files: canvas_editor_original.svg / canvas_editor_restored.svg");
 
             CanvasDocument filteredEditor = (CanvasDocument) filteredDocuments.getFirst();

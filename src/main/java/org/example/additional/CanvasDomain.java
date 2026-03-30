@@ -76,8 +76,17 @@ public final class CanvasDomain {
         artboard.linkedWidget = anchor;
         anchor.linkedWidget = artboard;
 
-        controls.widgets = List.of(statusLabel, saveButton, snapCheckbox, snapLabel, opacityDial, modeGroup, moveMode, editMode);
-        overlay.widgets = List.of(artboard, anchor);
+        controls.widgets = new LinkedList<>(List.of(
+                statusLabel,
+                saveButton,
+                snapCheckbox,
+                snapLabel,
+                opacityDial,
+                modeGroup,
+                moveMode,
+                editMode
+        ));
+        overlay.widgets = new LinkedList<>(List.of(artboard, anchor));
 
         for (Widget widget : controls.widgets) {
             attachToLayer(widget, controls);
@@ -131,7 +140,7 @@ public final class CanvasDomain {
         card.linkedWidget = dial;
         dial.controlledWidget = card;
 
-        widgets.widgets = List.of(title, card, dial);
+        widgets.widgets = new LinkedList<>(List.of(title, card, dial));
         for (Widget widget : widgets.widgets) {
             attachToLayer(widget, widgets);
         }
