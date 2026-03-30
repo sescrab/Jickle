@@ -1,240 +1,181 @@
 package org.example.jickle;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.util.DefaultIndenter;
+import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.annotation.JsonInclude;
-import org.example.jickle.annotation.JickleIgnore;
-import org.example.jickle.annotation.JicklableClass;
 
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.IdentityHashMap;
+import java.util.List;
 
 public class JickleSerializer {
 
     private final ObjectMapper mapper;
     private final boolean allowUnsafe;
+    private final DefaultPrettyPrinter prettyPrinter;
 
     public JickleSerializer(boolean allowUnsafe) {
         this.allowUnsafe = allowUnsafe;
         this.mapper = new ObjectMapper();
+        this.prettyPrinter = createPrettyPrinter();
 
         mapper.enable(SerializationFeature.INDENT_OUTPUT);
         mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
     }
 
-    public void dump(Object object, String filePath) throws IOException, IllegalAccessException {
-        Map<Object, Integer> idMap = new IdentityHashMap<>();
-        Set<Object> rootObjects = new HashSet<>();
-
-        parseObject(object, idMap, rootObjects);
-
-        ArrayNode mainArray = mapper.createArrayNode();
-        ArrayNode extraArray = mapper.createArrayNode();
-
-        for (Object obj : rootObjects) mainArray.add(buildObjectNode(obj, idMap));
-
-        List<Object> extras = new ArrayList<>(idMap.keySet());
-        extras.removeAll(rootObjects);
-        extras.sort(Comparator.comparingInt(idMap::get));
-
-        for (Object obj : extras) extraArray.add(buildObjectNode(obj, idMap));
-
-        ArrayNode root = mapper.createArrayNode();
-        root.add(mainArray);
-        root.add(extraArray);
-
-        String json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
-        json = json.replaceAll("\\s*:\\s*", ":");
-
-        Files.writeString(Path.of(filePath), json, StandardCharsets.UTF_8);
+    public void dump(Object object, String filePath) throws IOException {
+        if (object == null) {
+            writeEmptyResult(filePath);
+            return;
+        }
+        dumpRoots(List.of(object), filePath);
     }
-    public void dumpList(List<?> objList, String filePath) throws IOException, IllegalAccessException {
+
+    public void dumpList(List<?> objList, String filePath) throws IOException {
         if (objList == null || objList.isEmpty()) {
-            // Можно либо выбросить исключение, либо записать пустой JSON
-            Files.writeString(Path.of(filePath), "[[],[]]", StandardCharsets.UTF_8);
+            writeEmptyResult(filePath);
             return;
         }
+        dumpRoots(objList, filePath);
+    }
 
-        Map<Object, Integer> idMap = new IdentityHashMap<>();
-        Set<Object> rootObjects = new HashSet<>();
+    private void dumpRoots(Collection<?> roots, String filePath) throws IOException {
+        IdentityHashMap<Object, Integer> idMap = new IdentityHashMap<>();
+        List<Object> orderedObjects = new ArrayList<>();
+        IdentityHashMap<Object, Boolean> rootSet = new IdentityHashMap<>();
+        List<Object> orderedRoots = new ArrayList<>();
 
-        // ← Вот здесь было главное отличие от старого dump
-        for (Object object : objList) {
-            parseObject(object, idMap, rootObjects);
+        for (Object root : roots) {
+            if (root == null) {
+                continue;
+            }
+            ensureSupportedRoot(root);
+            collectObjects(root, idMap, orderedObjects);
+
+            if (!rootSet.containsKey(root)) {
+                rootSet.put(root, Boolean.TRUE);
+                orderedRoots.add(root);
+            }
         }
 
-        // Всё остальное — точно так же, как в dump()
         ArrayNode mainArray = mapper.createArrayNode();
-        ArrayNode extraArray = mapper.createArrayNode();
+        orderedRoots.forEach(root -> mainArray.add(buildObjectNode(root, idMap)));
 
-        for (Object obj : rootObjects) {
-            mainArray.add(buildObjectNode(obj, idMap));
-        }
-
-        List<Object> extras = new ArrayList<>(idMap.keySet());
-        extras.removeAll(rootObjects);
-        extras.sort(Comparator.comparingInt(idMap::get));
-
-        for (Object obj : extras) {
-            extraArray.add(buildObjectNode(obj, idMap));
-        }
+        ArrayNode additionalArray = mapper.createArrayNode();
+        orderedObjects.stream()
+                .filter(object -> !rootSet.containsKey(object))
+                .forEach(object -> additionalArray.add(buildObjectNode(object, idMap)));
 
         ArrayNode root = mapper.createArrayNode();
         root.add(mainArray);
-        root.add(extraArray);
+        root.add(additionalArray);
 
-        String json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
-        json = json.replaceAll("\\s*:\\s*", ":");
-
+        String json = mapper.writer(prettyPrinter).writeValueAsString(root);
+        json = json.replace(" : ", ": ");
         Files.writeString(Path.of(filePath), json, StandardCharsets.UTF_8);
     }
 
-    private void parseObject(Object object, Map<Object, Integer> idMap, Set<Object> rootObjects) throws IllegalAccessException{
-        if (object instanceof Collection<?> collection) {
-            collectObjects(object, idMap);
-            for (Object item : collection) collectObjects(item, idMap);
-            rootObjects.add(object);
-        } else if (object.getClass().isArray()) {
-            int len = java.lang.reflect.Array.getLength(object);
-            for (int i = 0; i < len; i++)
-                collectObjects(java.lang.reflect.Array.get(object, i), idMap);
-            collectObjects(object, idMap);
-            rootObjects.add(object);
-        } else if (object instanceof Map<?, ?> map) {
-            collectObjects(object, idMap);
-            for (Map.Entry<?, ?> e : map.entrySet()) {
-                collectObjects(e.getKey(), idMap);
-                collectObjects(e.getValue(), idMap);
-            }
-            rootObjects.add(object);
-        } else {
-            collectObjects(object, idMap);
-            if (object != null) rootObjects.add(object);
+    private DefaultPrettyPrinter createPrettyPrinter() {
+        DefaultPrettyPrinter printer = new DefaultPrettyPrinter();
+        DefaultIndenter indenter = new DefaultIndenter("  ", DefaultIndenter.SYS_LF);
+        printer.indentObjectsWith(indenter);
+        printer.indentArraysWith(indenter);
+        return printer;
+    }
+
+    private void writeEmptyResult(String filePath) throws IOException {
+        Files.writeString(Path.of(filePath), "[[],[]]", StandardCharsets.UTF_8);
+    }
+
+    private void ensureSupportedRoot(Object root) {
+        if (isSimpleType(root.getClass())) {
+            throw new IllegalArgumentException("Simple values cannot be serialized as root objects");
         }
     }
-    private void collectObjects(Object obj, Map<Object, Integer> idMap) throws IllegalAccessException {
-        if (obj == null || idMap.containsKey(obj)) {
+
+    private void collectObjects(Object object,
+                                IdentityHashMap<Object, Integer> idMap,
+                                List<Object> orderedObjects) {
+        if (object == null || isSimpleType(object.getClass()) || idMap.containsKey(object)) {
             return;
         }
 
-        if (isSimpleType(obj.getClass())) {
-            return;
-        }
+        validateClass(object.getClass());
 
-        Class<?> cls = obj.getClass();
-        boolean isArray = cls.isArray();
-        boolean isList = !isArray && (obj instanceof List<?>);
-        boolean isMap = !isArray && !isList && (obj instanceof Map<?, ?>);
+        idMap.put(object, orderedObjects.size() + 1);
+        orderedObjects.add(object);
 
-        if (!isArray && !isList && !isMap) {
-            if (obj instanceof Collection<?>) {
-                throw new IllegalArgumentException(
-                        "Collection type '" + cls.getName() + "' is not supported yet. " +
-                                "Currently supported: List (ArrayList, immutable List.of etc.), HashMap. " +
-                                "To add more collections, extend JickleSerializer.collectObjects()"
-                );
+        if (object.getClass().isArray()) {
+            int length = Array.getLength(object);
+            for (int index = 0; index < length; index++) {
+                collectObjects(Array.get(object, index), idMap, orderedObjects);
             }
         }
 
-        if (!isArray && !isList && !isMap) {
-            if (!allowUnsafe && !cls.isAnnotationPresent(JicklableClass.class)) {
-                throw new IllegalArgumentException(
-                        "Class " + cls.getName() + " is not annotated with @JicklableClass " +
-                                "(pass allowUnsafe = true if needed)"
-                );
-            }
-        }
-
-        int id = idMap.size() + 1;
-        idMap.put(obj, id);
-
-        if (isArray) {
-            int length = java.lang.reflect.Array.getLength(obj);
-            for (int i = 0; i < length; i++) {
-                collectObjects(java.lang.reflect.Array.get(obj, i), idMap);
-            }
-        } else if (isList) {
-            for (Object item : (List<?>) obj) {
-                collectObjects(item, idMap);
-            }
-        } else if (isMap) {
-            for (Map.Entry<?, ?> entry : ((Map<?, ?>) obj).entrySet()) {
-                collectObjects(entry.getKey(), idMap);
-                collectObjects(entry.getValue(), idMap);
-            }
-        } else {
-            for (Field field : getAllFields(cls)) {
-                if (field.isAnnotationPresent(JickleIgnore.class)) continue;
-                field.setAccessible(true);
-                Object value = field.get(obj);
-                if (value != null && !isSimpleType(value.getClass())) {
-                    collectObjects(value, idMap);
-                }
+        for (Field field : JickleRuntimeSupport.getSerializableFields(object.getClass())) {
+            Object value = JickleRuntimeSupport.readFieldValue(field, object);
+            if (value != null && !isSimpleType(value.getClass())) {
+                collectObjects(value, idMap, orderedObjects);
             }
         }
     }
 
-    private ObjectNode buildObjectNode(Object obj, Map<Object, Integer> idMap) throws IllegalAccessException {
+    private void validateClass(Class<?> clazz) {
+        if (JickleRuntimeSupport.isSerializableClass(clazz, allowUnsafe)) {
+            return;
+        }
+
+        throw new IllegalArgumentException(
+                "Class " + clazz.getName() + " is not annotated with @JicklableClass " +
+                        "or explicitly supported (pass allowUnsafe = true if needed)"
+        );
+    }
+
+    private ObjectNode buildObjectNode(Object object, IdentityHashMap<Object, Integer> idMap) {
         ObjectNode node = mapper.createObjectNode();
-        node.put("id", idMap.get(obj));
-        node.put("class_name", getHumanReadableClassName(obj.getClass()));
+        node.put("id", idMap.get(object));
+        node.put("class_name", getHumanReadableClassName(object.getClass()));
 
         ObjectNode data = mapper.createObjectNode();
 
-        boolean isArray = obj.getClass().isArray();
-        boolean isCollection = obj instanceof Collection<?> && !isArray;
-        boolean isMap = !isArray && !isCollection && obj instanceof Map<?, ?>;
-
-        if (isArray || isCollection || isMap) {
+        if (object.getClass().isArray()) {
             data.put("is_container", true);
-            if (isArray) {
-                data.put("component_type", obj.getClass().getComponentType().getName());
-            } else {
-                data.put("collection_class", obj.getClass().getName());
+            data.put("component_type", object.getClass().getComponentType().getName());
+
+            ArrayNode elements = mapper.createArrayNode();
+            int length = Array.getLength(object);
+            for (int index = 0; index < length; index++) {
+                addArrayElement(elements, Array.get(object, index), idMap);
+            }
+            data.set("elements", elements);
+        }
+
+        for (Field field : JickleRuntimeSupport.getSerializableFields(object.getClass())) {
+            Object value = JickleRuntimeSupport.readFieldValue(field, object);
+            if (value == null) {
+                continue;
             }
 
-            if (isArray || isCollection) {
-                ArrayNode elements = mapper.createArrayNode();
-                if (isArray) {
-                    int length = java.lang.reflect.Array.getLength(obj);
-                    for (int i = 0; i < length; i++) {
-                        addContainerElement(elements, java.lang.reflect.Array.get(obj, i), idMap);
-                    }
-                } else {
-                    for (Object item : (Collection<?>) obj)
-                        addContainerElement(elements, item, idMap);
-                }
-                data.set("elements", elements);
-            } else if (isMap) {
-                ArrayNode entries = mapper.createArrayNode();
-                for (Map.Entry<?, ?> entry : ((Map<?, ?>) obj).entrySet()) {
-                    ArrayNode pair = mapper.createArrayNode();
-                    addContainerElement(pair, entry.getKey(), idMap);
-                    addContainerElement(pair, entry.getValue(), idMap);
-                    entries.add(pair);
-                }
-                data.set("entries", entries);
+            String fieldName = field.getName();
+            if (isSimpleType(value.getClass())) {
+                putSimpleValue(data, fieldName, value);
+                continue;
             }
-        } else {
-            for (Field field : getAllFields(obj.getClass())) {
-                if (field.isAnnotationPresent(JickleIgnore.class)) continue;
-                field.setAccessible(true);
-                Object value = field.get(obj);
-                if (value == null) continue;
 
-                String fieldName = field.getName();
-                if (isSimpleType(value.getClass())) {
-                    putSimpleValue(data, fieldName, value);
-                } else {
-                    Integer refId = idMap.get(value);
-                    if (refId != null) data.put("object_" + fieldName, refId);
-                }
+            Integer refId = idMap.get(value);
+            if (refId != null) {
+                data.put("object_" + fieldName, refId);
             }
         }
 
@@ -242,14 +183,16 @@ public class JickleSerializer {
         return node;
     }
 
-    private void addContainerElement(ArrayNode elements, Object item, Map<Object, Integer> idMap) {
+    private void addArrayElement(ArrayNode elements, Object item, IdentityHashMap<Object, Integer> idMap) {
         if (item == null) {
             elements.addNull();
         } else if (isSimpleType(item.getClass())) {
             putSimpleValueToArray(elements, item);
         } else {
             Integer refId = idMap.get(item);
-            if (refId != null) elements.add("#" + refId);
+            if (refId != null) {
+                elements.add("#" + refId);
+            }
         }
     }
 
@@ -301,13 +244,5 @@ public class JickleSerializer {
                 type == Character.class ||
                 Number.class.isAssignableFrom(type) ||
                 type.isEnum();
-    }
-
-    private List<Field> getAllFields(Class<?> type) {
-        List<Field> fields = new ArrayList<>();
-        for (Class<?> c = type; c != null && c != Object.class; c = c.getSuperclass()) {
-            fields.addAll(Arrays.asList(c.getDeclaredFields()));
-        }
-        return fields;
     }
 }

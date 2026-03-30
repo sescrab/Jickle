@@ -3,7 +3,7 @@ package org.example.jickle;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.util.*;
+import java.util.Objects;
 
 public class JickleFilter {
 
@@ -13,137 +13,152 @@ public class JickleFilter {
         this.evaluator = evaluator;
     }
 
-    public boolean matches(ObjectNode objectNode, Map<String, ObjectNode> idToNode) {
-        return evaluator.test(objectNode, idToNode);
+    public boolean matches(ObjectNode node) {
+        return evaluator.test(normalizeDataNode(node));
     }
 
     @FunctionalInterface
     private interface Predicate {
-        boolean test(ObjectNode node, Map<String, ObjectNode> idToNode);
+        boolean test(ObjectNode dataNode);
     }
 
-    // Фабрики
     public static JickleFilter eq(String path, Object value) {
-        return new JickleFilter((n, m) -> Objects.equals(resolvePath(n, path, m), value));
+        return new JickleFilter(dataNode -> Objects.equals(resolveDirectField(dataNode, path), value));
     }
 
     public static JickleFilter ne(String path, Object value) {
-        return new JickleFilter((n, m) -> !Objects.equals(resolvePath(n, path, m), value));
+        return new JickleFilter(dataNode -> !Objects.equals(resolveDirectField(dataNode, path), value));
     }
 
     public static JickleFilter gt(String path, Number value) {
-        return new JickleFilter((n, m) -> compare(resolvePath(n, path, m), value) > 0);
+        return new JickleFilter(dataNode -> compare(resolveDirectField(dataNode, path), value) > 0);
     }
 
     public static JickleFilter ge(String path, Number value) {
-        return new JickleFilter((n, m) -> compare(resolvePath(n, path, m), value) >= 0);
+        return new JickleFilter(dataNode -> compare(resolveDirectField(dataNode, path), value) >= 0);
     }
 
     public static JickleFilter lt(String path, Number value) {
-        return new JickleFilter((n, m) -> compare(resolvePath(n, path, m), value) < 0);
+        return new JickleFilter(dataNode -> compare(resolveDirectField(dataNode, path), value) < 0);
     }
 
     public static JickleFilter le(String path, Number value) {
-        return new JickleFilter((n, m) -> compare(resolvePath(n, path, m), value) <= 0);
+        return new JickleFilter(dataNode -> compare(resolveDirectField(dataNode, path), value) <= 0);
     }
 
     public static JickleFilter contains(String path, String substring) {
-        return new JickleFilter((n, m) -> {
-            Object v = resolvePath(n, path, m);
-            return v instanceof String s && s.contains(substring);
+        return new JickleFilter(dataNode -> {
+            Object value = resolveDirectField(dataNode, path);
+            return value instanceof String stringValue && stringValue.contains(substring);
         });
     }
 
     public static JickleFilter startsWith(String path, String prefix) {
-        return new JickleFilter((n, m) -> {
-            Object v = resolvePath(n, path, m);
-            return v instanceof String s && s.startsWith(prefix);
+        return new JickleFilter(dataNode -> {
+            Object value = resolveDirectField(dataNode, path);
+            return value instanceof String stringValue && stringValue.startsWith(prefix);
         });
     }
 
     public static JickleFilter endsWith(String path, String suffix) {
-        return new JickleFilter((n, m) -> {
-            Object v = resolvePath(n, path, m);
-            return v instanceof String s && s.endsWith(suffix);
+        return new JickleFilter(dataNode -> {
+            Object value = resolveDirectField(dataNode, path);
+            return value instanceof String stringValue && stringValue.endsWith(suffix);
         });
     }
 
     public static JickleFilter isNull(String path) {
-        return new JickleFilter((n, m) -> resolvePath(n, path, m) == null);
+        return new JickleFilter(dataNode -> resolveDirectField(dataNode, path) == null);
     }
 
     public static JickleFilter notNull(String path) {
-        return new JickleFilter((n, m) -> resolvePath(n, path, m) != null);
+        return new JickleFilter(dataNode -> resolveDirectField(dataNode, path) != null);
     }
 
     public static JickleFilter and(JickleFilter... filters) {
-        return new JickleFilter((n, m) -> {
-            for (JickleFilter f : filters) if (!f.matches(n, m)) return false;
+        return new JickleFilter(dataNode -> {
+            for (JickleFilter filter : filters) {
+                if (!filter.matches(dataNode)) {
+                    return false;
+                }
+            }
             return true;
         });
     }
 
     public static JickleFilter or(JickleFilter... filters) {
-        return new JickleFilter((n, m) -> {
-            for (JickleFilter f : filters) if (f.matches(n, m)) return true;
+        return new JickleFilter(dataNode -> {
+            for (JickleFilter filter : filters) {
+                if (filter.matches(dataNode)) {
+                    return true;
+                }
+            }
             return false;
         });
     }
 
     public static JickleFilter not(JickleFilter filter) {
-        return new JickleFilter((n, m) -> !filter.matches(n, m));
+        return new JickleFilter(dataNode -> !filter.matches(dataNode));
     }
 
-    // Вспомогательные методы (некоторые используются в deserializer)
-    private static Object resolvePath(ObjectNode root, String path, Map<String, ObjectNode> idToNode) {
-        String[] parts = path.split("\\.");
-        ObjectNode currentData = (ObjectNode) root.get("data");
+    private static ObjectNode normalizeDataNode(ObjectNode node) {
+        JsonNode data = node.get("data");
+        if (data instanceof ObjectNode objectNode) {
+            return objectNode;
+        }
+        return node;
+    }
 
-        for (String field : parts) {
-            JsonNode val = getDataField(currentData, field);
-            if (val == null || val.isNull()) return null;
-
-            if (isReference(val)) {
-                String refId = extractRefId(val);
-                ObjectNode target = idToNode.get(refId);
-                if (target == null) return null;
-                currentData = (ObjectNode) target.get("data");
-                continue;
-            }
-
-            // простое значение
-            if (val.isNumber()) return val.numberValue();
-            if (val.isTextual()) return val.textValue();
-            if (val.isBoolean()) return val.booleanValue();
+    private static Object resolveDirectField(ObjectNode dataNode, String path) {
+        if (path == null || path.isBlank() || path.contains(".")) {
             return null;
         }
+
+        JsonNode directValue = dataNode.get(path);
+        if (directValue != null) {
+            return toJavaValue(directValue);
+        }
+
+        JsonNode referenceValue = dataNode.get("object_" + path);
+        if (referenceValue != null) {
+            return toJavaValue(referenceValue);
+        }
+
         return null;
     }
 
-    private static JsonNode getDataField(ObjectNode data, String fieldName) {
-        if (data.has(fieldName)) return data.get(fieldName);
-        String refKey = "object_" + fieldName;
-        if (data.has(refKey)) return data.get(refKey);
-        return null;
+    private static Object toJavaValue(JsonNode value) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (value.isNumber()) {
+            return value.numberValue();
+        }
+        if (value.isTextual()) {
+            return value.textValue();
+        }
+        if (value.isBoolean()) {
+            return value.booleanValue();
+        }
+        return value;
     }
 
     public static boolean isReference(JsonNode node) {
-        if (node.isNull()) return false;
-        if (node.isTextual() && node.textValue().startsWith("#")) return true;
-//        return node.isNumber(); // т.к. object_x хранит просто число
-        return false;
+        return node != null && node.isTextual() && node.textValue().startsWith("#");
     }
 
     public static String extractRefId(JsonNode node) {
         if (node.isTextual()) {
-            String s = node.textValue();
-            return s.startsWith("#") ? s.substring(1) : s;
+            String text = node.textValue();
+            return text.startsWith("#") ? text.substring(1) : text;
         }
         return node.asText();
     }
 
     private static int compare(Object left, Number right) {
-        if (left == null || !(left instanceof Number n)) return 0;
-        return Double.compare(n.doubleValue(), right.doubleValue());
+        if (!(left instanceof Number number)) {
+            return 0;
+        }
+        return Double.compare(number.doubleValue(), right.doubleValue());
     }
 }
