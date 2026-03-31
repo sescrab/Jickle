@@ -7,28 +7,25 @@ import sun.misc.Unsafe;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
+import java.util.*;
 
 final class JickleRuntimeSupport {
 
     private static final Set<String> EXPLICITLY_SUPPORTED_CLASS_NAMES = Set.of(
             ArrayList.class.getName(),
             LinkedList.class.getName(),
-            LinkedHashMap.class.getName()
+            LinkedHashMap.class.getName(),
+            LinkedHashSet.class.getName(),
+            ArrayDeque.class.getName()
     );
 
     private static final List<String> EXPLICITLY_SUPPORTED_PREFIXES = List.of(
             ArrayList.class.getName() + "$",
             LinkedList.class.getName() + "$",
             LinkedHashMap.class.getName() + "$",
-            "java.util.HashMap$"
+            "java.util.HashMap$",
+            LinkedHashSet.class.getName() + "$",
+            ArrayDeque.class.getName() + "$"
     );
 
     private static final Unsafe UNSAFE = initUnsafe();
