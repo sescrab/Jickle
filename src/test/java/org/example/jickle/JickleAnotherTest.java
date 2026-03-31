@@ -600,6 +600,7 @@ class JickleAnotherTest {
 
         List<Object> restored = unsafeDes.load(file.toString());
         assertInstanceOf(TreeMap.class, restored.get(0));
+        assertEquals(map, restored.get(0));
         assertInstanceOf(PriorityQueue.class, restored.get(1));
     }
 }
