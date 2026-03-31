@@ -19,6 +19,20 @@ public final class CanvasDomain {
     public interface Checkable extends Widget {
     }
 
+    public static SceneItem[] createSampleScene() {
+        return new SceneItem[] {
+                sceneRect("scene-panel", "panel", "paper", 32, 88, 344, 346, 26),
+                sceneRect("scene-board", "board", "board", 456, 88, 724, 520, 28),
+                sceneLabel("scene-panel-title", "muted", "CONTROL PANEL", 56, 120),
+                sceneButton("btn-delete", "red", "Delete layer", 56, 196, 176, 46),
+                sceneButton("btn-save", "gold", "Save layout", 56, 252, 176, 46),
+                sceneButton("btn-reset", "red", "Reset view", 56, 308, 176, 46),
+                sceneButton("btn-publish", "teal", "Publish", 56, 364, 176, 46),
+                sceneLabel("scene-board-title", "ink", "Live preview", 494, 122),
+                sceneDot("scene-anchor", "gold", 520, 164, 20)
+        };
+    }
+
     public static CanvasDocument createEditorCanvas() {
         SharedStyle accent = new SharedStyle("accent", "#FFE082", "#6D4C41", 2);
         SharedStyle muted = new SharedStyle("muted", "#CFD8DC", "#455A64", 1);
@@ -171,6 +185,23 @@ public final class CanvasDomain {
             this.fillColor = fillColor;
             this.strokeColor = strokeColor;
             this.strokeWidth = strokeWidth;
+        }
+    }
+
+    @JicklableClass
+    public static class SceneItem {
+        public String id;
+        public String kind;
+        public String color;
+        public String text;
+        public int x;
+        public int y;
+        public int width;
+        public int height;
+        public int radius;
+        public boolean visible;
+
+        public SceneItem() {
         }
     }
 
@@ -355,6 +386,44 @@ public final class CanvasDomain {
             result.put(widgetId(widget), widget);
         }
         return result;
+    }
+
+    private static SceneItem sceneRect(String id, String kind, String color, int x, int y, int width, int height, int radius) {
+        SceneItem item = sceneBase(id, kind, color, null, x, y);
+        item.width = width;
+        item.height = height;
+        item.radius = radius;
+        return item;
+    }
+
+    private static SceneItem sceneButton(String id, String color, String text, int x, int y, int width, int height) {
+        SceneItem item = sceneBase(id, "button", color, text, x, y);
+        item.width = width;
+        item.height = height;
+        item.radius = 14;
+        return item;
+    }
+
+    private static SceneItem sceneLabel(String id, String color, String text, int x, int y) {
+        return sceneBase(id, "label", color, text, x, y);
+    }
+
+    private static SceneItem sceneDot(String id, String color, int x, int y, int radius) {
+        SceneItem item = sceneBase(id, "dot", color, null, x, y);
+        item.radius = radius;
+        return item;
+    }
+
+    private static SceneItem sceneBase(String id, String kind, String color, String text, int x, int y) {
+        SceneItem item = new SceneItem();
+        item.id = id;
+        item.kind = kind;
+        item.color = color;
+        item.text = text;
+        item.x = x;
+        item.y = y;
+        item.visible = true;
+        return item;
     }
 
     private static void attachToLayer(Widget widget, Layer layer) {

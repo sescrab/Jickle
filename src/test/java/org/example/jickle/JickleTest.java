@@ -9,6 +9,7 @@ import org.example.additional.CanvasDomain.CheckBoxWidget;
 import org.example.additional.CanvasDomain.LabelWidget;
 import org.example.additional.CanvasDomain.RadioButtonWidget;
 import org.example.additional.CanvasDomain.RadioGroupWidget;
+import org.example.additional.CanvasDomain.SceneItem;
 import org.example.additional.CanvasDomain.SharedStyle;
 import org.example.additional.CanvasDomain.Widget;
 import org.example.additional.CanvasSvgRenderer;
@@ -21,6 +22,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -250,6 +252,39 @@ class JickleTest {
     }
 
     @Test
+    void rendersSceneArrayAndVisuallyFiltersOutSelectedButtons() throws Exception {
+        SceneItem[] original = CanvasDomain.createSampleScene();
+
+        Path file = tempDir.resolve("scene-items.json");
+        serializer.dumpList(Arrays.asList(original), file.toString());
+
+        SceneItem[] restored = toSceneArray(deserializer.load(file.toString()));
+        SceneItem[] filtered = toSceneArray(deserializer.load(
+                file.toString(),
+                JickleFilter.not(
+                        JickleFilter.and(
+                                JickleFilter.eq("kind", "button"),
+                                JickleFilter.eq("color", "red")
+                        )
+                )
+        ));
+
+        String originalSvg = CanvasSvgRenderer.renderScene("", original);
+        String restoredSvg = CanvasSvgRenderer.renderScene("", restored);
+        String filteredSvg = CanvasSvgRenderer.renderScene("", filtered);
+
+        assertEquals(original.length, restored.length);
+        assertEquals(originalSvg, restoredSvg);
+        assertEquals(original.length - 2, filtered.length);
+        assertTrue(originalSvg.contains("Delete layer"));
+        assertTrue(originalSvg.contains("Reset view"));
+        assertFalse(filteredSvg.contains("Delete layer"));
+        assertFalse(filteredSvg.contains("Reset view"));
+        assertTrue(filteredSvg.contains("Save layout"));
+        assertTrue(filteredSvg.contains("Publish"));
+    }
+
+    @Test
     void rejectsNonAnnotatedUserClassWhenUnsafeDisabled() {
         class BadCanvas {
             public Queue<String> names = new LinkedList<>(List.of("one", "two"));
@@ -283,5 +318,11 @@ class JickleTest {
     static class QueueHolder {
         public String name;
         public Queue<Widget> widgets;
+    }
+
+    private SceneItem[] toSceneArray(List<Object> loadedItems) {
+        return loadedItems.stream()
+                .map(SceneItem.class::cast)
+                .toArray(SceneItem[]::new);
     }
 }

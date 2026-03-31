@@ -9,6 +9,7 @@ import org.example.additional.CanvasDomain.LabelWidget;
 import org.example.additional.CanvasDomain.Layer;
 import org.example.additional.CanvasDomain.RadioButtonWidget;
 import org.example.additional.CanvasDomain.RadioGroupWidget;
+import org.example.additional.CanvasDomain.SceneItem;
 import org.example.additional.CanvasDomain.RectangleWidget;
 import org.example.additional.CanvasDomain.SharedStyle;
 import org.example.additional.CanvasDomain.Widget;
@@ -90,6 +91,35 @@ public final class CanvasSvgRenderer {
         return svg.toString();
     }
 
+    public static String renderScene(String title, SceneItem[] scene) {
+        StringBuilder svg = new StringBuilder();
+        svg.append("""
+                <svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1240" height="700" viewBox="0 0 1240 700">
+                  <defs>
+                    <linearGradient id="sceneButtonGloss" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.20"/>
+                      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <rect width="100%" height="100%" fill="#FAFAF7"/>
+                """);
+        if (title != null && !title.isBlank()) {
+            svg.append("""
+                      <text x="32" y="18" font-family="Segoe UI, sans-serif" font-size="24" font-weight="700" dominant-baseline="hanging" fill="#263238">%s</text>
+                    """.formatted(escape(title)));
+        }
+
+        for (SceneItem item : scene) {
+            if (item == null || !item.visible) {
+                continue;
+            }
+            appendSceneItem(svg, item);
+        }
+
+        svg.append("</svg>\n");
+        return svg.toString();
+    }
+
     private static void appendWidget(StringBuilder svg, Widget widget) {
         switch (widget) {
             case RectangleWidget rectangle -> appendRectangle(svg, rectangle);
@@ -101,6 +131,50 @@ public final class CanvasSvgRenderer {
             case RadioGroupWidget radioGroup -> appendRadioGroup(svg, radioGroup);
             case RadioButtonWidget radioButton -> appendRadioButton(svg, radioButton);
             case null, default -> {
+            }
+        }
+    }
+
+    private static void appendSceneItem(StringBuilder svg, SceneItem item) {
+        switch (item.kind) {
+            case "panel", "board" -> svg.append("""
+                    <rect x="%d" y="%d" width="%d" height="%d" rx="%d" fill="%s" stroke="%s" stroke-width="1.5"/>
+                    """.formatted(item.x, item.y, item.width, item.height, item.radius, sceneFill(item.color), sceneStroke(item.color)));
+            case "button" -> svg.append("""
+                    <rect x="%d" y="%d" width="%d" height="%d" rx="%d" fill="%s" stroke="%s" stroke-width="2"/>
+                    <rect x="%d" y="%d" width="%d" height="%d" rx="%d" fill="url(#sceneButtonGloss)"/>
+                    <text x="%d" y="%d" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600" dominant-baseline="middle" fill="#263238">%s</text>
+                    """.formatted(
+                    item.x,
+                    item.y,
+                    item.width,
+                    item.height,
+                    item.radius,
+                    sceneFill(item.color),
+                    sceneStroke(item.color),
+                    item.x,
+                    item.y,
+                    item.width,
+                    item.height,
+                    item.radius,
+                    item.x + 18,
+                    item.y + (item.height / 2),
+                    escape(item.text)
+            ));
+            case "label" -> svg.append("""
+                    <text x="%d" y="%d" font-family="Segoe UI, sans-serif" font-size="%d" font-weight="%d" dominant-baseline="hanging" fill="%s">%s</text>
+                    """.formatted(
+                    item.x,
+                    item.y,
+                    sceneLabelSize(item),
+                    sceneLabelWeight(item),
+                    sceneTextColor(item.color),
+                    escape(item.text)
+            ));
+            case "dot" -> svg.append("""
+                    <circle cx="%d" cy="%d" r="%d" fill="%s" stroke="%s" stroke-width="2"/>
+                    """.formatted(item.x + item.radius, item.y + item.radius, item.radius, sceneFill(item.color), sceneStroke(item.color)));
+            default -> {
             }
         }
     }
@@ -232,6 +306,52 @@ public final class CanvasSvgRenderer {
 
     private static int strokeWidth(SharedStyle style) {
         return style == null ? 1 : style.strokeWidth;
+    }
+
+    private static String sceneFill(String color) {
+        return switch (color) {
+            case "paper" -> "#FFFDF8";
+            case "board" -> "#CFD8DC";
+            case "red" -> "#EF9A9A";
+            case "gold" -> "#FFE082";
+            case "teal" -> "#80CBC4";
+            default -> "#ECEFF1";
+        };
+    }
+
+    private static String sceneStroke(String color) {
+        return switch (color) {
+            case "paper" -> "#E0D8CC";
+            case "board" -> "#607D8B";
+            case "red" -> "#8D3B3B";
+            case "gold" -> "#8D6E63";
+            case "teal" -> "#00695C";
+            default -> "#607D8B";
+        };
+    }
+
+    private static String sceneTextColor(String color) {
+        return switch (color) {
+            case "muted" -> "#8D6E63";
+            default -> "#263238";
+        };
+    }
+
+    private static int sceneLabelSize(SceneItem item) {
+        if ("scene-title".equals(item.id)) {
+            return 24;
+        }
+        if ("scene-panel-title".equals(item.id)) {
+            return 12;
+        }
+        return 16;
+    }
+
+    private static int sceneLabelWeight(SceneItem item) {
+        if ("scene-title".equals(item.id) || "scene-panel-title".equals(item.id)) {
+            return 700;
+        }
+        return 400;
     }
 
     private static String decimal(double value) {
